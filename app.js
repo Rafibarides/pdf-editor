@@ -135,6 +135,35 @@
     $("#loading-overlay").classList.add("hidden");
   }
 
+  const WINANSI_EXTRA = new Set([
+    0x20AC,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,
+    0x2030,0x0160,0x2039,0x0152,0x017D,0x2018,0x2019,0x201C,
+    0x201D,0x2022,0x2013,0x2014,0x02DC,0x2122,0x0161,0x203A,
+    0x0153,0x017E,0x0178,
+  ]);
+  const UNICODE_SUBS = {
+    "\u2192":"->","\u2190":"<-","\u2191":"^","\u2193":"v",
+    "\u21D2":"=>","\u21D0":"<=",
+    "\u2713":"v","\u2714":"v","\u2717":"x","\u2718":"x",
+    "\u25CF":"*","\u25CB":"o","\u25A0":"#","\u25A1":"[]",
+    "\u2605":"*","\u2606":"*","\u2610":"[ ]","\u2611":"[x]","\u2612":"[x]",
+    "\u2003":" ","\u2002":" ","\u2009":" ","\u200B":"",
+    "\u00AD":"","\uFEFF":"",
+  };
+  function sanitizeForPdf(str) {
+    let out = "";
+    for (const ch of str) {
+      if (UNICODE_SUBS[ch] !== undefined) { out += UNICODE_SUBS[ch]; continue; }
+      const c = ch.codePointAt(0);
+      if (c >= 0x20 && c <= 0x7E) { out += ch; continue; }
+      if (c >= 0xA0 && c <= 0xFF) { out += ch; continue; }
+      if (c === 0x0A || c === 0x0D || c === 0x09) { out += ch; continue; }
+      if (WINANSI_EXTRA.has(c)) { out += ch; continue; }
+      out += " ";
+    }
+    return out;
+  }
+
   function parsePageRange(str, max) {
     const pages = new Set();
     str.split(",").map((s) => s.trim()).filter(Boolean).forEach((part) => {
@@ -457,11 +486,12 @@
   function renderConvert(el) {
     let files = [], srcType = "image";
     el.innerHTML = `
-      <div class="tool-head"><h2>Convert to PDF</h2><p>Turn images and text documents into PDF files.</p></div>
+      <div class="tool-head"><h2>Convert to PDF</h2><p>Turn images, text, and Word documents into PDF files.</p></div>
       <div class="form-group"><label>Source type</label>
         <div class="select-wrap"><select id="stype" class="input">
           <option value="image">Images (JPG, PNG, GIF, WEBP, BMP)</option>
           <option value="text">Text files (TXT, CSV)</option>
+          <option value="word">Word Documents (DOCX)</option>
         </select></div>
       </div>
       <div id="dz"></div>
@@ -470,7 +500,13 @@
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="file-up"></i>Convert</button></div>`;
     $("#out", el).appendChild(makeOutputSel());
 
-    function accepts() { return srcType === "image" ? ".jpg,.jpeg,.png,.gif,.webp,.bmp,.svg" : ".txt,.csv"; }
+    function accepts() {
+      if (srcType === "image") return ".jpg,.jpeg,.png,.gif,.webp,.bmp,.svg";
+      if (srcType === "word") return ".docx";
+      return ".txt,.csv";
+    }
+
+    const DZ_LABELS = { image: "Drop images here", text: "Drop a text file here", word: "Drop a Word document here" };
 
     function buildDZ() {
       const dz = $("#dz", el);
@@ -480,7 +516,7 @@
       $("#go", el).disabled = true;
       dz.appendChild(makeDropZone({
         accept: accepts(), multiple: srcType === "image",
-        label: srcType === "image" ? "Drop images here" : "Drop a text file here",
+        label: DZ_LABELS[srcType],
         onFiles: (f) => {
           files = f;
           $("#finfo", el).classList.remove("hidden");
@@ -511,6 +547,7 @@
         const outName = getOutputName(el, defaultName);
         const finalName = outName.endsWith(".pdf") ? outName : outName + ".pdf";
         if (srcType === "image") await convertImages(files, finalName);
+        else if (srcType === "word") await convertWord(files[0], finalName);
         else await convertText(files[0], finalName);
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
@@ -554,6 +591,188 @@
         if (ln) pg.drawText(ln, { x: margin, y: ph - margin - idx * lh, size: sz, font, color: rgb(0.1, 0.1, 0.1) });
       });
     }
+    await savePdf(await doc.save(), outName);
+  }
+
+  async function convertWord(file, outName) {
+    const ab = await file.arrayBuffer();
+    const result = await mammoth.convertToHtml(
+      { arrayBuffer: ab },
+      {
+        convertImage: mammoth.images.imgElement(function (image) {
+          return image.read("base64").then(function (buf) {
+            return { src: "data:" + image.contentType + ";base64," + buf };
+          });
+        }),
+      }
+    );
+
+    const html = result.value;
+    const dom = new DOMParser().parseFromString(html, "text/html");
+
+    const doc = await PDFDocument.create();
+    const fReg = await doc.embedFont(StandardFonts.Helvetica);
+    const fBold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const fIt = await doc.embedFont(StandardFonts.HelveticaOblique);
+    const fBI = await doc.embedFont(StandardFonts.HelveticaBoldOblique);
+
+    function pickFont(b, i) {
+      if (b && i) return fBI;
+      if (b) return fBold;
+      if (i) return fIt;
+      return fReg;
+    }
+
+    const pw = 595.28, ph = 841.89, mg = 50;
+    const maxW = pw - 2 * mg;
+    const clr = rgb(0.1, 0.1, 0.1);
+
+    let page = doc.addPage([pw, ph]);
+    let y = ph - mg;
+
+    function needPage(h) {
+      if (y - h < mg) { page = doc.addPage([pw, ph]); y = ph - mg; }
+    }
+
+    function extractRuns(node, bold, italic) {
+      const runs = [];
+      for (const ch of node.childNodes) {
+        if (ch.nodeType === 3) {
+          const t = sanitizeForPdf(ch.textContent);
+          if (t) runs.push({ t, b: bold, i: italic });
+        } else if (ch.nodeType === 1) {
+          const tag = ch.tagName.toLowerCase();
+          if (["ul", "ol", "table", "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "img"].includes(tag)) continue;
+          if (tag === "br") { runs.push({ t: "\n", b: bold, i: italic }); continue; }
+          const nb = bold || tag === "strong" || tag === "b";
+          const ni = italic || tag === "em" || tag === "i";
+          runs.push(...extractRuns(ch, nb, ni));
+        }
+      }
+      return runs;
+    }
+
+    function wrapRuns(runs, fontSize, width) {
+      const words = [];
+      for (const r of runs) {
+        if (r.t === "\n") { words.push({ br: true }); continue; }
+        const f = pickFont(r.b, r.i);
+        for (const p of r.t.split(/\s+/)) {
+          if (p) words.push({ t: p, f, sz: fontSize });
+        }
+      }
+      const lines = [[]];
+      let lw = 0;
+      const spW = fReg.widthOfTextAtSize(" ", fontSize);
+      for (const w of words) {
+        if (w.br) { lines.push([]); lw = 0; continue; }
+        const ww = w.f.widthOfTextAtSize(w.t, w.sz);
+        if (lines[lines.length - 1].length && lw + spW + ww > width) {
+          lines.push([w]); lw = ww;
+        } else {
+          if (lines[lines.length - 1].length) lw += spW;
+          lines[lines.length - 1].push(w); lw += ww;
+        }
+      }
+      return lines;
+    }
+
+    function drawLine(words, x, yPos, fontSize) {
+      const spW = fReg.widthOfTextAtSize(" ", fontSize);
+      let cx = x;
+      for (let i = 0; i < words.length; i++) {
+        if (i > 0) cx += spW;
+        page.drawText(words[i].t, { x: cx, y: yPos, size: words[i].sz, font: words[i].f, color: clr });
+        cx += words[i].f.widthOfTextAtSize(words[i].t, words[i].sz);
+      }
+    }
+
+    function renderBlock(runs, fontSize, indent, spaceBefore, spaceAfter) {
+      y -= spaceBefore;
+      const lh = fontSize * 1.4;
+      const lines = wrapRuns(runs, fontSize, maxW - indent);
+      for (const line of lines) {
+        needPage(lh);
+        y -= lh;
+        if (line.length) drawLine(line, mg + indent, y, fontSize);
+      }
+      y -= spaceAfter;
+    }
+
+    async function renderImg(src) {
+      if (!src || !src.startsWith("data:")) return;
+      try {
+        const bytes = dataUrlToBytes(src);
+        let img;
+        if (/image\/jpe?g/.test(src)) img = await doc.embedJpg(bytes);
+        else if (/image\/png/.test(src)) img = await doc.embedPng(bytes);
+        else { img = await doc.embedPng(await imgToCanvas(src)); }
+        let w = img.width, h = img.height;
+        if (w > maxW) { h *= maxW / w; w = maxW; }
+        const mxH = ph - 2 * mg;
+        if (h > mxH) { w *= mxH / h; h = mxH; }
+        needPage(h + 10);
+        y -= h;
+        page.drawImage(img, { x: mg, y, width: w, height: h });
+        y -= 10;
+      } catch (_) { /* skip unembeddable images */ }
+    }
+
+    const H_SZ = { h1: 24, h2: 20, h3: 16, h4: 14, h5: 12, h6: 11 };
+
+    async function processEl(el, indent) {
+      const tag = el.tagName?.toLowerCase();
+      if (!tag) return;
+
+      if (H_SZ[tag]) {
+        const sz = H_SZ[tag];
+        const runs = extractRuns(el, true, false);
+        if (runs.some((r) => r.t.trim())) renderBlock(runs, sz, indent, sz * 0.5, sz * 0.3);
+      } else if (tag === "p") {
+        const imgEl = el.querySelector("img");
+        if (imgEl) await renderImg(imgEl.getAttribute("src"));
+        const runs = extractRuns(el, false, false);
+        if (runs.some((r) => r.t.trim())) {
+          renderBlock(runs, 11, indent, 2, 6);
+        } else if (!imgEl) {
+          y -= 11;
+        }
+      } else if (tag === "ul" || tag === "ol") {
+        let counter = 0;
+        for (const li of el.children) {
+          if (li.tagName?.toLowerCase() !== "li") continue;
+          counter++;
+          const prefix = tag === "ul" ? "\u2022  " : counter + ". ";
+          const runs = extractRuns(li, false, false);
+          runs.unshift({ t: prefix, b: false, i: false });
+          renderBlock(runs, 11, indent + 18, 1, 3);
+          for (const child of li.children) {
+            const ct = child.tagName?.toLowerCase();
+            if (ct === "ul" || ct === "ol") await processEl(child, indent + 18);
+          }
+        }
+        y -= 4;
+      } else if (tag === "table") {
+        for (const row of el.querySelectorAll("tr")) {
+          const cells = [...row.querySelectorAll("td, th")];
+          const isHead = cells[0]?.tagName?.toLowerCase() === "th";
+          const text = sanitizeForPdf(cells.map((c) => c.textContent.trim()).join("    "));
+          if (text) renderBlock([{ t: text, b: isHead, i: false }], 10, indent, 1, 1);
+        }
+        y -= 6;
+      } else if (tag === "img") {
+        await renderImg(el.getAttribute("src"));
+      } else {
+        for (const child of el.children) {
+          await processEl(child, indent);
+        }
+      }
+    }
+
+    for (const child of dom.body.children) {
+      await processEl(child, 0);
+    }
+
     await savePdf(await doc.save(), outName);
   }
 
@@ -1006,19 +1225,17 @@
   ================================================ */
   function renderTextbox(el) {
     let pdfFile = null, pdfJsDoc = null, currentPage = 0, totalPages = 0;
-    let tbPos = { x: 40, y: 40 };
-    let tbScale = 1, initialWidth = 220, baseFontSize = 16;
     const SCALE = 1.5;
+    const textboxes = [];
 
     el.innerHTML = `
-      <div class="tool-head"><h2>Add Textbox</h2><p>Type text, position it on any page, resize to scale, then apply.</p></div>
+      <div class="tool-head"><h2>Add Textbox</h2><p>Click and drag on the page to draw a textbox. Add as many as you need.</p></div>
       <div id="dz"></div>
       <div id="ws" class="hidden">
         <div class="sign-toolbar">
           <div class="tb-controls">
-            <div class="form-group-inline"><label>Size</label><input type="number" id="tbSize" class="input input-sm" value="16" min="6" max="120"></div>
+            <div class="form-group-inline"><label>Size</label><input type="number" id="tbSize" class="input input-sm" value="14" min="6" max="120"></div>
             <div class="form-group-inline"><label>Color</label><input type="color" id="tbColor" class="input-color" value="#000000"></div>
-            <button class="btn btn-secondary" id="addTb"><i data-lucide="type"></i>Place Text</button>
           </div>
           <div class="page-nav">
             <button class="btn-icon" id="prevP"><i data-lucide="chevron-left"></i></button>
@@ -1028,19 +1245,14 @@
         </div>
         <div class="pdf-preview-wrap" id="pvw">
           <canvas id="pcanvas"></canvas>
-          <div id="tbOv" class="text-overlay hidden">
-            <div class="text-ov-handle"><i data-lucide="grip-horizontal"></i></div>
-            <textarea class="text-ov-input" spellcheck="false" placeholder="Type here\u2026"></textarea>
-            <div class="resize-h" id="tbRz"></div>
-          </div>
+          <div id="drawRect" class="draw-rect hidden"></div>
         </div>
         <div id="oname-wrap" class="mt-1"></div>
         <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="apply" disabled><i data-lucide="check"></i>Apply &amp; Download</button></div>
       </div>`;
 
     const pvw = $("#pvw", el), canvas = $("#pcanvas", el);
-    const tbOv = $("#tbOv", el), tbInput = $(".text-ov-input", el);
-    const tbHandleEl = $(".text-ov-handle", el);
+    const drawRectEl = $("#drawRect", el);
     $("#out", el).appendChild(makeOutputSel());
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
     lucide.createIcons();
@@ -1054,6 +1266,7 @@
         currentPage = 0;
         $("#dz", el).classList.add("hidden");
         $("#ws", el).classList.remove("hidden");
+        canvas.style.cursor = "crosshair";
         const wrap = $("#oname-wrap", el);
         wrap.innerHTML = "";
         wrap.appendChild(makeOutputName(pdfFile.name.replace(/\.pdf$/i, "_edited.pdf")));
@@ -1073,111 +1286,149 @@
       $("#nextP", el).disabled = currentPage === totalPages - 1;
     }
 
-    $("#prevP", el).addEventListener("click", async () => { if (currentPage > 0) { currentPage--; await renderPg(); } });
-    $("#nextP", el).addEventListener("click", async () => { if (currentPage < totalPages - 1) { currentPage++; await renderPg(); } });
-
-    function getVisualFontSize() {
-      return baseFontSize * tbScale * canvas.clientWidth * SCALE / canvas.width;
+    function clearAllBoxes() {
+      textboxes.forEach((tb) => tb.el.remove());
+      textboxes.length = 0;
+      $("#apply", el).disabled = true;
     }
 
-    function updateOverlayStyle() {
-      const vfs = getVisualFontSize();
-      tbInput.style.fontSize = vfs + "px";
-      tbInput.style.lineHeight = (vfs * 1.35) + "px";
-      tbInput.style.color = $("#tbColor", el).value;
-      tbInput.style.height = "auto";
-      tbInput.style.height = Math.max(tbInput.scrollHeight, vfs * 1.5) + "px";
-    }
+    $("#prevP", el).addEventListener("click", async () => { if (currentPage > 0) { clearAllBoxes(); currentPage--; await renderPg(); } });
+    $("#nextP", el).addEventListener("click", async () => { if (currentPage < totalPages - 1) { clearAllBoxes(); currentPage++; await renderPg(); } });
 
-    $("#addTb", el).addEventListener("click", () => {
-      baseFontSize = parseInt($("#tbSize", el).value) || 16;
-      tbScale = 1;
-      tbPos = { x: 40, y: 40 };
-      initialWidth = Math.min(220, pvw.clientWidth - 80);
-
-      tbOv.classList.remove("hidden");
-      tbOv.style.left = tbPos.x + "px";
-      tbOv.style.top = tbPos.y + "px";
-      tbOv.style.width = initialWidth + "px";
-
-      updateOverlayStyle();
-      tbInput.value = "";
-      tbInput.focus();
-      $("#apply", el).disabled = false;
-      toast("Textbox placed \u2014 type and drag to position", "success");
-    });
-
-    $("#tbSize", el).addEventListener("input", () => {
-      baseFontSize = parseInt($("#tbSize", el).value) || 16;
-      updateOverlayStyle();
-    });
-    $("#tbColor", el).addEventListener("input", updateOverlayStyle);
-    tbInput.addEventListener("input", updateOverlayStyle);
-
-    /* --- Drag & resize (mouse + touch) --- */
-    let dragging = false, resizing = false, dOff = {}, rStart = {};
-
-    function getPointer(e) {
+    function getPtr(e) {
       if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
       return { x: e.clientX, y: e.clientY };
     }
 
-    function startDrag(e) {
-      dragging = true;
-      const ptr = getPointer(e);
-      const r = tbOv.getBoundingClientRect();
-      dOff = { x: ptr.x - r.left, y: ptr.y - r.top };
+    function visFontSize(pdfPt) {
+      return pdfPt * canvas.clientWidth * SCALE / canvas.width;
+    }
+
+    /* --- Draw-to-create --- */
+    let drawing = false, drawStart = null;
+    let activeDrag = null, activeResize = null;
+
+    function onPvwDown(e) {
+      if (e.target !== canvas) return;
+      drawing = true;
+      const ptr = getPtr(e);
+      const cr = pvw.getBoundingClientRect();
+      drawStart = { x: ptr.x - cr.left, y: ptr.y - cr.top };
+      drawRectEl.classList.remove("hidden");
+      Object.assign(drawRectEl.style, { left: drawStart.x + "px", top: drawStart.y + "px", width: "0px", height: "0px" });
       e.preventDefault();
     }
 
-    function startResize(e) {
-      resizing = true;
-      const ptr = getPointer(e);
-      rStart = { x: ptr.x, w: tbOv.offsetWidth };
-      e.stopPropagation();
-      e.preventDefault();
-    }
+    pvw.addEventListener("mousedown", onPvwDown);
+    pvw.addEventListener("touchstart", onPvwDown, { passive: false });
 
-    function onPointerMove(e) {
-      if (!dragging && !resizing) return;
-      e.preventDefault();
-      const ptr = getPointer(e);
-      if (dragging) {
+    function onDocMove(e) {
+      const ptr = getPtr(e);
+      if (drawing && drawStart) {
+        e.preventDefault();
         const cr = pvw.getBoundingClientRect();
-        let x = ptr.x - cr.left - dOff.x, y = ptr.y - cr.top - dOff.y;
-        x = Math.max(0, Math.min(x, pvw.clientWidth - tbOv.offsetWidth));
-        y = Math.max(0, Math.min(y, pvw.clientHeight - tbOv.offsetHeight));
-        tbOv.style.left = x + "px";
-        tbOv.style.top = y + "px";
-        tbPos.x = x; tbPos.y = y;
+        const cx = Math.max(0, Math.min(ptr.x - cr.left, pvw.clientWidth));
+        const cy = Math.max(0, Math.min(ptr.y - cr.top, pvw.clientHeight));
+        const x = Math.min(drawStart.x, cx), y = Math.min(drawStart.y, cy);
+        Object.assign(drawRectEl.style, { left: x + "px", top: y + "px", width: Math.abs(cx - drawStart.x) + "px", height: Math.abs(cy - drawStart.y) + "px" });
+        return;
       }
-      if (resizing) {
-        const nw = Math.max(60, rStart.w + (ptr.x - rStart.x));
-        tbScale = nw / initialWidth;
-        tbOv.style.width = nw + "px";
-        updateOverlayStyle();
+      if (activeDrag) {
+        e.preventDefault();
+        const cr = pvw.getBoundingClientRect();
+        let nx = ptr.x - cr.left - activeDrag.ox, ny = ptr.y - cr.top - activeDrag.oy;
+        nx = Math.max(0, Math.min(nx, pvw.clientWidth - activeDrag.tb.el.offsetWidth));
+        ny = Math.max(0, Math.min(ny, pvw.clientHeight - activeDrag.tb.el.offsetHeight));
+        activeDrag.tb.el.style.left = nx + "px";
+        activeDrag.tb.el.style.top = ny + "px";
+        return;
+      }
+      if (activeResize) {
+        e.preventDefault();
+        const nw = Math.max(40, activeResize.sw + (ptr.x - activeResize.sx));
+        const nh = Math.max(20, activeResize.sh + (ptr.y - activeResize.sy));
+        activeResize.tb.el.style.width = nw + "px";
+        activeResize.tb.el.style.height = nh + "px";
       }
     }
 
-    function onPointerUp() { dragging = false; resizing = false; }
+    function onDocUp() {
+      if (drawing) {
+        drawing = false;
+        drawRectEl.classList.add("hidden");
+        const x = parseFloat(drawRectEl.style.left), y = parseFloat(drawRectEl.style.top);
+        const w = parseFloat(drawRectEl.style.width), h = parseFloat(drawRectEl.style.height);
+        drawStart = null;
+        if (w >= 20 && h >= 12) createTextbox(x, y, w, h);
+      }
+      activeDrag = null;
+      activeResize = null;
+    }
 
-    tbHandleEl.addEventListener("mousedown", startDrag);
-    tbHandleEl.addEventListener("touchstart", startDrag, { passive: false });
+    document.addEventListener("mousemove", onDocMove);
+    document.addEventListener("touchmove", onDocMove, { passive: false });
+    document.addEventListener("mouseup", onDocUp);
+    document.addEventListener("touchend", onDocUp);
+    document.addEventListener("touchcancel", onDocUp);
 
-    const tbRz = $("#tbRz", el);
-    tbRz.addEventListener("mousedown", startResize);
-    tbRz.addEventListener("touchstart", startResize, { passive: false });
+    /* --- Create a textbox --- */
+    function createTextbox(x, y, w, h) {
+      const fontSize = parseInt($("#tbSize", el).value) || 14;
+      const color = $("#tbColor", el).value;
 
-    document.addEventListener("mousemove", onPointerMove);
-    document.addEventListener("touchmove", onPointerMove, { passive: false });
-    document.addEventListener("mouseup", onPointerUp);
-    document.addEventListener("touchend", onPointerUp);
-    document.addEventListener("touchcancel", onPointerUp);
+      const box = document.createElement("div");
+      box.className = "text-overlay";
+      box.innerHTML = `<textarea class="text-ov-input" spellcheck="false" placeholder="Type\u2026"></textarea><button class="text-ov-del"><i data-lucide="x"></i></button><div class="resize-h"></div>`;
+      Object.assign(box.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
 
-    /* --- Apply text --- */
+      const ta = box.querySelector(".text-ov-input");
+      const vfs = visFontSize(fontSize);
+      ta.style.fontSize = vfs + "px";
+      ta.style.lineHeight = (vfs * 1.35) + "px";
+      ta.style.color = color;
+
+      pvw.appendChild(box);
+      lucide.createIcons();
+
+      const tb = { el: box, ta, fontSize, color };
+      textboxes.push(tb);
+      ta.focus();
+      $("#apply", el).disabled = false;
+
+      box.querySelector(".text-ov-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        box.remove();
+        const idx = textboxes.indexOf(tb);
+        if (idx >= 0) textboxes.splice(idx, 1);
+        if (!textboxes.length) $("#apply", el).disabled = true;
+      });
+
+      function boxDown(e) {
+        if (e.target === ta || e.target.closest(".resize-h") || e.target.closest(".text-ov-del")) return;
+        const ptr = getPtr(e);
+        const r = box.getBoundingClientRect();
+        activeDrag = { tb, ox: ptr.x - r.left, oy: ptr.y - r.top };
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      box.addEventListener("mousedown", boxDown);
+      box.addEventListener("touchstart", boxDown, { passive: false });
+
+      const rz = box.querySelector(".resize-h");
+      function rzDown(e) {
+        const ptr = getPtr(e);
+        activeResize = { tb, sx: ptr.x, sy: ptr.y, sw: box.offsetWidth, sh: box.offsetHeight };
+        e.stopPropagation();
+        e.preventDefault();
+      }
+      rz.addEventListener("mousedown", rzDown);
+      rz.addEventListener("touchstart", rzDown, { passive: false });
+    }
+
+    /* --- Apply all textboxes --- */
     $("#apply", el).addEventListener("click", async () => {
-      const text = tbInput.value.trim();
-      if (!text || !pdfFile) { toast("Enter some text first", "error"); return; }
+      const filled = textboxes.filter((tb) => tb.ta.value.trim());
+      if (!filled.length || !pdfFile) { toast("Enter text in at least one textbox", "error"); return; }
       showLoading("Adding text\u2026");
       try {
         const doc = await PDFDocument.load(await readFile(pdfFile));
@@ -1186,44 +1437,41 @@
         const sx = pgW / canvas.clientWidth;
         const sy = pgH / canvas.clientHeight;
         const font = await doc.embedFont(StandardFonts.Helvetica);
-
-        const pdfFontSize = baseFontSize * tbScale;
-        const lineHeight = pdfFontSize * 1.35;
-
         const pvwRect = pvw.getBoundingClientRect();
-        const bodyRect = tbInput.getBoundingClientRect();
-        const textLeft = (bodyRect.left - pvwRect.left) * sx;
-        const textTop = (bodyRect.top - pvwRect.top) * sy;
-        const maxWidth = tbInput.clientWidth * sx;
 
-        const hex = $("#tbColor", el).value;
-        const cr = parseInt(hex.slice(1, 3), 16) / 255;
-        const cg = parseInt(hex.slice(3, 5), 16) / 255;
-        const cb = parseInt(hex.slice(5, 7), 16) / 255;
-        const color = rgb(cr, cg, cb);
+        for (const tb of filled) {
+          const text = tb.ta.value.trim();
+          const taRect = tb.ta.getBoundingClientRect();
+          const textLeft = (taRect.left - pvwRect.left) * sx;
+          const textTop = (taRect.top - pvwRect.top) * sy;
+          const maxWidth = tb.ta.clientWidth * sx;
+          const pdfFontSize = tb.fontSize;
+          const lineHeight = pdfFontSize * 1.35;
 
-        const wrappedLines = [];
-        for (const rawLine of text.split("\n")) {
-          if (!rawLine.trim()) { wrappedLines.push(""); continue; }
-          let cur = "";
-          for (const word of rawLine.split(" ")) {
-            const test = cur ? cur + " " + word : word;
-            if (font.widthOfTextAtSize(test, pdfFontSize) > maxWidth && cur) {
-              wrappedLines.push(cur);
-              cur = word;
-            } else {
-              cur = test;
+          const hex = tb.color;
+          const cr = parseInt(hex.slice(1, 3), 16) / 255;
+          const cg = parseInt(hex.slice(3, 5), 16) / 255;
+          const cb = parseInt(hex.slice(5, 7), 16) / 255;
+          const color = rgb(cr, cg, cb);
+
+          const wrappedLines = [];
+          for (const rawLine of text.split("\n")) {
+            if (!rawLine.trim()) { wrappedLines.push(""); continue; }
+            let cur = "";
+            for (const word of rawLine.split(" ")) {
+              const test = cur ? cur + " " + word : word;
+              if (font.widthOfTextAtSize(test, pdfFontSize) > maxWidth && cur) {
+                wrappedLines.push(cur); cur = word;
+              } else { cur = test; }
             }
+            if (cur) wrappedLines.push(cur);
           }
-          if (cur) wrappedLines.push(cur);
-        }
 
-        wrappedLines.forEach((line, i) => {
-          const pdfY = pgH - textTop - pdfFontSize * 0.82 - i * lineHeight;
-          if (line) {
-            page.drawText(line, { x: textLeft, y: pdfY, size: pdfFontSize, font, color });
-          }
-        });
+          wrappedLines.forEach((line, i) => {
+            const pdfY = pgH - textTop - pdfFontSize * 0.82 - i * lineHeight;
+            if (line) page.drawText(line, { x: textLeft, y: pdfY, size: pdfFontSize, font, color });
+          });
+        }
 
         const defName = pdfFile.name.replace(/\.pdf$/i, "_edited.pdf");
         const outName = getOutputName(el, defName);
