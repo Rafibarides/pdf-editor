@@ -34,6 +34,9 @@
     { id: "watermark", icon: "droplets", name: "Add Watermark", desc: "Overlay text across every page", accent: "blue" },
     { id: "pagenums", icon: "hash", name: "Page Numbers", desc: "Add numbering to your pages", accent: "pink" },
     { id: "textbox", icon: "type", name: "Add Textbox", desc: "Place custom text anywhere on a page", accent: "blue" },
+    { id: "imgconvert", icon: "repeat", name: "Image Converter", desc: "Convert images between JPG, PNG, and WEBP", accent: "pink" },
+    { id: "imgresize", icon: "scaling", name: "Image Resize", desc: "Resize by width or set a file size limit", accent: "blue" },
+    { id: "colorpicker", icon: "pipette", name: "Color Picker", desc: "Pick colors from any image and build a palette", accent: "pink" },
   ];
 
   const RENDERERS = {
@@ -46,6 +49,9 @@
     watermark: renderWatermark,
     pagenums: renderPageNums,
     textbox: renderTextbox,
+    imgconvert: renderImgConvert,
+    imgresize: renderImgResize,
+    colorpicker: renderColorPicker,
   };
 
   /* ================================================
@@ -150,6 +156,21 @@
     "\u2003":" ","\u2002":" ","\u2009":" ","\u200B":"",
     "\u00AD":"","\uFEFF":"",
   };
+  function formatBytes(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
+  }
+
+  function loadImage(src) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = rej;
+      img.src = src;
+    });
+  }
+
   function sanitizeForPdf(str) {
     let out = "";
     for (const ch of str) {
@@ -1478,6 +1499,307 @@
         await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
+  }
+
+  /* ================================================
+     Tool: Image Converter
+  ================================================ */
+  function renderImgConvert(el) {
+    let file = null;
+    const IMG_ACCEPT = ".jpg,.jpeg,.png,.gif,.webp,.bmp,.svg,.ico,.avif,.tiff";
+    const EXT = { png: ".png", jpeg: ".jpg", webp: ".webp" };
+
+    el.innerHTML = `
+      <div class="tool-head"><h2>Image Converter</h2><p>Convert any image to PNG, JPG, or WEBP.</p></div>
+      <div id="dz"></div>
+      <div id="opts" class="hidden">
+        <div class="info-panel">
+          <div class="info-row"><span>File</span><span id="fn"></span></div>
+          <div class="info-row"><span>Size</span><span id="fsz"></span></div>
+        </div>
+        <div class="inline-fields mt-1">
+          <div class="form-group"><label>Output format</label>
+            <div class="select-wrap"><select id="fmt" class="input">
+              <option value="png">PNG</option>
+              <option value="jpeg">JPG</option>
+              <option value="webp">WEBP</option>
+            </select></div>
+          </div>
+          <div class="form-group hidden" id="qwrap"><label>Quality (%)</label><input type="number" id="qual" class="input" value="92" min="10" max="100"></div>
+        </div>
+        <div id="oname-wrap" class="mt-1"></div>
+      </div>
+      <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="repeat"></i>Convert</button></div>`;
+    $("#dz", el).appendChild(makeDropZone({ accept: IMG_ACCEPT, label: "Drop an image here", onFiles: onFile }));
+    $("#out", el).appendChild(makeOutputSel());
+    lucide.createIcons();
+
+    function updateQualVis() {
+      const fmt = $("#fmt", el).value;
+      $("#qwrap", el).classList.toggle("hidden", fmt === "png");
+    }
+
+    function defaultName() {
+      const base = file ? file.name.replace(/\.[^.]+$/, "") : "image";
+      return base + EXT[$("#fmt", el).value];
+    }
+
+    function refreshName() {
+      const wrap = $("#oname-wrap", el);
+      wrap.innerHTML = "";
+      wrap.appendChild(makeOutputName(defaultName()));
+      lucide.createIcons();
+    }
+
+    function onFile(files) {
+      file = files[0];
+      $("#fn", el).textContent = file.name;
+      $("#fsz", el).textContent = formatBytes(file.size);
+      $("#opts", el).classList.remove("hidden");
+      $("#go", el).disabled = false;
+      updateQualVis();
+      refreshName();
+    }
+
+    $("#fmt", el).addEventListener("change", () => { updateQualVis(); refreshName(); });
+
+    $("#go", el).addEventListener("click", async () => {
+      if (!file) return;
+      showLoading("Converting\u2026");
+      try {
+        const img = await loadImage(URL.createObjectURL(file));
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext("2d").drawImage(img, 0, 0);
+        const fmt = $("#fmt", el).value;
+        const q = fmt === "png" ? undefined : (parseInt($("#qual", el).value) || 92) / 100;
+        const blob = await new Promise((res) => c.toBlob(res, "image/" + fmt, q));
+        const name = getOutputName(el, defaultName());
+        await saveBlobAs(blob, name);
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+  }
+
+  /* ================================================
+     Tool: Image Resize
+  ================================================ */
+  function renderImgResize(el) {
+    let file = null, origW = 0, origH = 0;
+
+    el.innerHTML = `
+      <div class="tool-head"><h2>Image Resize</h2><p>Resize by exact width or set a file size limit. Aspect ratio is always maintained.</p></div>
+      <div id="dz"></div>
+      <div id="opts" class="hidden">
+        <div class="info-panel">
+          <div class="info-row"><span>File</span><span id="fn"></span></div>
+          <div class="info-row"><span>Dimensions</span><span id="dims"></span></div>
+          <div class="info-row"><span>Size</span><span id="fsz"></span></div>
+        </div>
+        <div class="form-group mt-1"><label>Resize mode</label>
+          <div class="select-wrap"><select id="mode" class="input">
+            <option value="width">Set exact width (px)</option>
+            <option value="filesize">Max file size (KB)</option>
+          </select></div>
+        </div>
+        <div id="widthMode">
+          <div class="form-group"><label>Width (px)</label><input type="number" id="rw" class="input" min="1"></div>
+          <div id="newdims" class="info-hint"></div>
+        </div>
+        <div id="fsMode" class="hidden">
+          <div class="form-group"><label>Max file size (KB)</label><input type="number" id="maxkb" class="input" min="1" value="200"></div>
+          <p class="info-hint">Outputs as JPG. Reduces quality then dimensions until under limit.</p>
+        </div>
+        <div id="oname-wrap" class="mt-1"></div>
+      </div>
+      <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="scaling"></i>Resize</button></div>`;
+    $("#dz", el).appendChild(makeDropZone({ accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.svg,.avif", label: "Drop an image here", onFiles: onFile }));
+    $("#out", el).appendChild(makeOutputSel());
+    lucide.createIcons();
+
+    function onFile(files) {
+      file = files[0];
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        origW = img.naturalWidth; origH = img.naturalHeight;
+        $("#fn", el).textContent = file.name;
+        $("#dims", el).textContent = `${origW} \u00d7 ${origH} px`;
+        $("#fsz", el).textContent = formatBytes(file.size);
+        $("#rw", el).value = origW;
+        $("#newdims", el).textContent = `\u2192 ${origW} \u00d7 ${origH} px`;
+        $("#opts", el).classList.remove("hidden");
+        $("#go", el).disabled = false;
+        const base = file.name.replace(/\.[^.]+$/, "");
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(base + "_resized.jpg"));
+        lucide.createIcons();
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+
+    $("#mode", el).addEventListener("change", () => {
+      const isW = $("#mode", el).value === "width";
+      $("#widthMode", el).classList.toggle("hidden", !isW);
+      $("#fsMode", el).classList.toggle("hidden", isW);
+    });
+
+    $("#rw", el).addEventListener("input", () => {
+      const nw = parseInt($("#rw", el).value) || origW;
+      const nh = Math.round(nw * origH / origW);
+      $("#newdims", el).textContent = `\u2192 ${nw} \u00d7 ${nh} px`;
+    });
+
+    $("#go", el).addEventListener("click", async () => {
+      if (!file) return;
+      showLoading("Resizing\u2026");
+      try {
+        const img = await loadImage(URL.createObjectURL(file));
+        const mode = $("#mode", el).value;
+        let blob;
+
+        if (mode === "width") {
+          const nw = Math.max(1, parseInt($("#rw", el).value) || origW);
+          const nh = Math.round(nw * origH / origW);
+          const c = document.createElement("canvas");
+          c.width = nw; c.height = nh;
+          c.getContext("2d").drawImage(img, 0, 0, nw, nh);
+          blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.92));
+        } else {
+          const maxBytes = (parseInt($("#maxkb", el).value) || 200) * 1024;
+          let w = origW, h = origH, q = 0.92;
+          while (true) {
+            const c = document.createElement("canvas");
+            c.width = w; c.height = h;
+            c.getContext("2d").drawImage(img, 0, 0, w, h);
+            blob = await new Promise((res) => c.toBlob(res, "image/jpeg", q));
+            if (blob.size <= maxBytes || (w < 10 && q <= 0.1)) break;
+            if (q > 0.15) { q -= 0.08; } else { w = Math.round(w * 0.85); h = Math.round(h * 0.85); q = 0.80; }
+          }
+        }
+
+        const defName = file.name.replace(/\.[^.]+$/, "") + "_resized.jpg";
+        const name = getOutputName(el, defName);
+        await saveBlobAs(blob, name);
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+  }
+
+  /* ================================================
+     Tool: Color Picker
+  ================================================ */
+  function renderColorPicker(el) {
+    const palette = [];
+    let pickedHex = null;
+
+    el.innerHTML = `
+      <div class="tool-head"><h2>Color Picker</h2><p>Upload an image and click to pick colors. Build a palette with hex codes.</p></div>
+      <div id="dz"></div>
+      <div id="ws" class="hidden">
+        <div class="picker-wrap"><canvas id="pickCanvas"></canvas></div>
+        <div class="picker-info mt-1">
+          <div id="pickSwatch" class="pick-swatch"></div>
+          <span id="pickHex" class="pick-hex">\u2014</span>
+          <button class="btn btn-secondary btn-sm" id="addColor" disabled><i data-lucide="plus"></i>Add to palette</button>
+        </div>
+        <div id="paletteWrap" class="hidden mt-1">
+          <div class="palette-head"><span class="palette-title">Palette</span><button class="btn btn-ghost btn-sm" id="copyAll"><i data-lucide="copy"></i>Copy all</button></div>
+          <div id="palette" class="color-palette"></div>
+        </div>
+      </div>`;
+
+    const canvasEl = $("#pickCanvas", el);
+    const ctx = canvasEl.getContext("2d", { willReadFrequently: true });
+    $("#dz", el).appendChild(makeDropZone({ accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.svg,.avif", label: "Drop an image here", onFiles: onFile }));
+    lucide.createIcons();
+
+    function onFile(files) {
+      const url = URL.createObjectURL(files[0]);
+      const img = new Image();
+      img.onload = () => {
+        const maxW = Math.min(img.naturalWidth, 800);
+        const scale = maxW / img.naturalWidth;
+        canvasEl.width = Math.round(img.naturalWidth * scale);
+        canvasEl.height = Math.round(img.naturalHeight * scale);
+        ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
+        $("#dz", el).classList.add("hidden");
+        $("#ws", el).classList.remove("hidden");
+        lucide.createIcons();
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+
+    function sampleColor(e) {
+      const rect = canvasEl.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      const x = Math.floor((t.clientX - rect.left) * (canvasEl.width / rect.width));
+      const y = Math.floor((t.clientY - rect.top) * (canvasEl.height / rect.height));
+      if (x < 0 || y < 0 || x >= canvasEl.width || y >= canvasEl.height) return null;
+      const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+      return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1).toUpperCase();
+    }
+
+    let locked = false;
+
+    function updatePreview(hex) {
+      if (!hex) return;
+      pickedHex = hex;
+      $("#pickSwatch", el).style.background = hex;
+      $("#pickHex", el).textContent = hex;
+      $("#addColor", el).disabled = false;
+    }
+
+    canvasEl.addEventListener("mousemove", (e) => { if (!locked) { const h = sampleColor(e); if (h) updatePreview(h); } });
+    canvasEl.addEventListener("touchmove", (e) => { e.preventDefault(); if (!locked) { const h = sampleColor(e); if (h) updatePreview(h); } }, { passive: false });
+    canvasEl.addEventListener("click", (e) => {
+      const h = sampleColor(e);
+      if (h) { updatePreview(h); locked = true; canvasEl.classList.add("pick-locked"); }
+    });
+    canvasEl.addEventListener("touchend", (e) => { e.preventDefault(); locked = true; canvasEl.classList.add("pick-locked"); });
+
+    $("#addColor", el).addEventListener("click", () => {
+      if (!pickedHex || palette.includes(pickedHex)) return;
+      palette.push(pickedHex);
+      renderPalette();
+      locked = false;
+      canvasEl.classList.remove("pick-locked");
+    });
+
+    $("#copyAll", el).addEventListener("click", () => {
+      if (!palette.length) return;
+      navigator.clipboard.writeText(palette.join("\n")).then(() => toast("Copied " + palette.length + " colors", "success"));
+    });
+
+    function renderPalette() {
+      const wrap = $("#paletteWrap", el);
+      const cont = $("#palette", el);
+      if (!palette.length) { wrap.classList.add("hidden"); cont.innerHTML = ""; return; }
+      wrap.classList.remove("hidden");
+      cont.innerHTML = palette.map((hex, i) => `
+        <div class="color-swatch" data-i="${i}">
+          <div class="color-swatch-dot" style="background:${hex}"></div>
+          <span class="color-swatch-hex">${hex}</span>
+          <button class="color-swatch-copy" title="Copy"><i data-lucide="copy"></i></button>
+          <button class="color-swatch-del" title="Remove"><i data-lucide="x"></i></button>
+        </div>`).join("");
+      cont.querySelectorAll(".color-swatch-copy").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const hex = palette[+btn.closest(".color-swatch").dataset.i];
+          navigator.clipboard.writeText(hex).then(() => toast("Copied " + hex, "success"));
+        });
+      });
+      cont.querySelectorAll(".color-swatch-del").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          palette.splice(+btn.closest(".color-swatch").dataset.i, 1);
+          renderPalette();
+        });
+      });
+      lucide.createIcons();
+    }
   }
 
   /* ================================================

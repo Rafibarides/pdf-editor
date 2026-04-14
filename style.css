@@ -145,7 +145,7 @@ img { display: block; max-width: 100%; }
 /* ---------- Tool Grid ---------- */
 .tool-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1rem;
 }
 
@@ -739,6 +739,92 @@ img { display: block; max-width: 100%; }
     right: -14px;
   }
 }
+
+/* ---------- Color Picker ---------- */
+.picker-wrap {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.picker-wrap canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; }
+.picker-wrap canvas.pick-locked { cursor: pointer; }
+
+.picker-info {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+
+.pick-swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+  background: var(--border-light);
+  flex-shrink: 0;
+}
+.pick-hex {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 80px;
+}
+
+.btn-sm { padding: .4rem .85rem; font-size: .825rem; }
+
+.palette-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .5rem;
+}
+.palette-title { font-size: .875rem; font-weight: 600; color: var(--text-2); }
+
+.color-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+
+.color-swatch {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4rem .65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: box-shadow .15s;
+}
+.color-swatch:hover { box-shadow: var(--shadow-sm); }
+
+.color-swatch-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,.1);
+  flex-shrink: 0;
+}
+.color-swatch-hex {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: .8rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.color-swatch-copy, .color-swatch-del {
+  color: var(--text-3);
+  display: flex;
+  padding: 2px;
+  border-radius: 3px;
+  transition: color .15s, background .15s;
+}
+.color-swatch-copy:hover { color: var(--blue); background: var(--blue-light); }
+.color-swatch-del:hover { color: #EF4444; background: #FEF2F2; }
+.color-swatch-copy svg, .color-swatch-del svg { width: 14px; height: 14px; }
 
 /* ---------- Animations ---------- */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
