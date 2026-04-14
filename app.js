@@ -191,6 +191,19 @@
     return w;
   }
 
+  function makeOutputName(defaultName) {
+    const w = document.createElement("div");
+    w.className = "output-name";
+    w.innerHTML = `<label for="oname"><i data-lucide="file-edit"></i>Output filename</label><input type="text" id="oname" class="input" value="${defaultName}" placeholder="${defaultName}">`;
+    return w;
+  }
+
+  function getOutputName(el, fallback) {
+    const inp = $("#oname", el);
+    const val = inp ? inp.value.trim() : "";
+    return val || fallback;
+  }
+
   /* ================================================
      Navigation
   ================================================ */
@@ -240,9 +253,11 @@
       <div class="tool-head"><h2>Merge PDFs</h2><p>Combine multiple PDF files into one. Drag items to reorder.</p></div>
       <div id="dz"></div>
       <div id="flist" class="file-list"></div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="layers"></i>Merge</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", multiple: true, label: "Drop PDFs here or click to browse", hint: ".pdf files", onFiles: (f) => { files = files.concat(f.filter((x) => x.name.endsWith(".pdf"))); renderList(); } }));
     $("#out", el).appendChild(makeOutputSel());
+    $("#oname-wrap", el).appendChild(makeOutputName("merged.pdf"));
     lucide.createIcons();
 
     function renderList() {
@@ -286,7 +301,8 @@
           const src = await PDFDocument.load(await readFile(f));
           (await merged.copyPages(src, src.getPageIndices())).forEach((p) => merged.addPage(p));
         }
-        await savePdf(await merged.save(), "merged.pdf");
+        const outName = getOutputName(el, "merged.pdf");
+        await savePdf(await merged.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -305,6 +321,7 @@
         <div class="form-group mt-1"><label for="ppp">Pages per part</label><input type="number" id="ppp" class="input" min="1" value="1"></div>
         <div id="preview" class="info-hint"></div>
       </div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="scissors"></i>Split</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", hint: ".pdf", onFiles: onFile }));
     $("#out", el).appendChild(makeOutputSel());
@@ -320,6 +337,11 @@
         $("#pcount", el).textContent = total;
         $("#info", el).classList.remove("hidden");
         $("#go", el).disabled = false;
+        const base = file.name.replace(/\.pdf$/i, "");
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(`${base}_split.zip`));
+        lucide.createIcons();
         updatePreview();
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     }
@@ -351,7 +373,8 @@
           (await doc.copyPages(src, indices)).forEach((pg) => doc.addPage(pg));
           zip.file(`${base}_${String(i + 1).padStart(pad, "0")}.pdf`, await doc.save());
         }
-        await saveZip(zip, `${base}_split.zip`);
+        const outName = getOutputName(el, `${base}_split.zip`);
+        await saveZip(zip, outName.endsWith(".zip") ? outName : outName + ".zip");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -371,6 +394,7 @@
       </div>
       <div id="dz"></div>
       <div id="finfo" class="info-panel hidden"><span id="fcnt"></span></div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="file-up"></i>Convert</button></div>`;
     $("#out", el).appendChild(makeOutputSel());
 
@@ -385,7 +409,19 @@
       dz.appendChild(makeDropZone({
         accept: accepts(), multiple: srcType === "image",
         label: srcType === "image" ? "Drop images here" : "Drop a text file here",
-        onFiles: (f) => { files = f; $("#finfo", el).classList.remove("hidden"); $("#fcnt", el).textContent = `${f.length} file${f.length > 1 ? "s" : ""} selected`; $("#go", el).disabled = false; },
+        onFiles: (f) => {
+          files = f;
+          $("#finfo", el).classList.remove("hidden");
+          $("#fcnt", el).textContent = `${f.length} file${f.length > 1 ? "s" : ""} selected`;
+          $("#go", el).disabled = false;
+          const defaultName = srcType === "image"
+            ? (f.length === 1 ? f[0].name.replace(/\.[^.]+$/, "") + ".pdf" : "images.pdf")
+            : f[0].name.replace(/\.[^.]+$/, "") + ".pdf";
+          const wrap = $("#oname-wrap", el);
+          wrap.innerHTML = "";
+          wrap.appendChild(makeOutputName(defaultName));
+          lucide.createIcons();
+        },
       }));
       lucide.createIcons();
     }
@@ -397,14 +433,19 @@
       if (!files.length) return;
       showLoading("Converting\u2026");
       try {
-        if (srcType === "image") await convertImages(files);
-        else await convertText(files[0]);
+        const defaultName = srcType === "image"
+          ? (files.length === 1 ? files[0].name.replace(/\.[^.]+$/, "") + ".pdf" : "images.pdf")
+          : files[0].name.replace(/\.[^.]+$/, "") + ".pdf";
+        const outName = getOutputName(el, defaultName);
+        const finalName = outName.endsWith(".pdf") ? outName : outName + ".pdf";
+        if (srcType === "image") await convertImages(files, finalName);
+        else await convertText(files[0], finalName);
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
     lucide.createIcons();
   }
 
-  async function convertImages(imgs) {
+  async function convertImages(imgs, outName) {
     const doc = await PDFDocument.create();
     for (const f of imgs) {
       const bytes = await readFile(f);
@@ -415,11 +456,10 @@
       const page = doc.addPage([img.width, img.height]);
       page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
     }
-    const name = imgs.length === 1 ? imgs[0].name.replace(/\.[^.]+$/, "") + ".pdf" : "images.pdf";
-    await savePdf(await doc.save(), name);
+    await savePdf(await doc.save(), outName);
   }
 
-  async function convertText(file) {
+  async function convertText(file, outName) {
     const text = await file.text();
     const doc = await PDFDocument.create();
     const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -442,7 +482,7 @@
         if (ln) pg.drawText(ln, { x: margin, y: ph - margin - idx * lh, size: sz, font, color: rgb(0.1, 0.1, 0.1) });
       });
     }
-    await savePdf(await doc.save(), file.name.replace(/\.[^.]+$/, "") + ".pdf");
+    await savePdf(await doc.save(), outName);
   }
 
   /* ================================================
@@ -466,6 +506,7 @@
           </div>
         </div>
         <div class="pdf-preview-wrap" id="pvw"><canvas id="pcanvas"></canvas><div id="sigOv" class="sig-overlay hidden"><img id="sigImg" src="" alt=""><div class="resize-h" id="sigRz"></div></div></div>
+        <div id="oname-wrap" class="mt-1"></div>
         <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="apply" disabled><i data-lucide="check"></i>Apply &amp; Download</button></div>
       </div>`;
 
@@ -483,6 +524,11 @@
         currentPage = 0;
         $("#dz", el).classList.add("hidden");
         $("#ws", el).classList.remove("hidden");
+        const defName = pdfFile.name.replace(/\.pdf$/i, "_signed.pdf");
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(defName));
+        lucide.createIcons();
         await renderPg();
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     }
@@ -598,7 +644,9 @@
           width: sigPos.w * sx,
           height: sigPos.h * sy,
         });
-        await savePdf(await doc.save(), pdfFile.name.replace(/\.pdf$/i, "_signed.pdf"));
+        const defName = pdfFile.name.replace(/\.pdf$/i, "_signed.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -623,6 +671,7 @@
           <div class="form-group"><label>Pages (e.g. 1-3, 5)</label><input id="rng" class="input" placeholder="All pages"></div>
         </div>
       </div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="rotate-cw"></i>Rotate</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
     $("#out", el).appendChild(makeOutputSel());
@@ -630,8 +679,18 @@
 
     async function onFile(files) {
       file = files[0]; showLoading("Reading\u2026");
-      try { const d = await PDFDocument.load(await readFile(file)); total = d.getPageCount(); $("#fn", el).textContent = file.name; $("#pc", el).textContent = total; $("#opts", el).classList.remove("hidden"); $("#go", el).disabled = false; }
-      catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+      try {
+        const d = await PDFDocument.load(await readFile(file));
+        total = d.getPageCount();
+        $("#fn", el).textContent = file.name;
+        $("#pc", el).textContent = total;
+        $("#opts", el).classList.remove("hidden");
+        $("#go", el).disabled = false;
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_rotated.pdf")));
+        lucide.createIcons();
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     }
 
     $("#go", el).addEventListener("click", async () => {
@@ -642,7 +701,9 @@
         const rng = $("#rng", el).value.trim();
         const indices = rng ? parsePageRange(rng, total) : doc.getPageIndices();
         indices.forEach((i) => { const p = doc.getPage(i); p.setRotation(degrees(p.getRotation().angle + deg)); });
-        await savePdf(await doc.save(), file.name.replace(/\.pdf$/i, "_rotated.pdf"));
+        const defName = file.name.replace(/\.pdf$/i, "_rotated.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -662,6 +723,7 @@
         </div>
         <div class="form-group mt-1"><label>Pages to extract (e.g. 1-3, 5, 8-10)</label><input id="rng" class="input" placeholder="1-3, 5"></div>
       </div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="file-output"></i>Extract</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
     $("#out", el).appendChild(makeOutputSel());
@@ -669,8 +731,18 @@
 
     async function onFile(files) {
       file = files[0]; showLoading("Reading\u2026");
-      try { const d = await PDFDocument.load(await readFile(file)); total = d.getPageCount(); $("#fn", el).textContent = file.name; $("#pc", el).textContent = total; $("#opts", el).classList.remove("hidden"); $("#go", el).disabled = false; }
-      catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+      try {
+        const d = await PDFDocument.load(await readFile(file));
+        total = d.getPageCount();
+        $("#fn", el).textContent = file.name;
+        $("#pc", el).textContent = total;
+        $("#opts", el).classList.remove("hidden");
+        $("#go", el).disabled = false;
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_extracted.pdf")));
+        lucide.createIcons();
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     }
 
     $("#go", el).addEventListener("click", async () => {
@@ -684,7 +756,9 @@
         const src = await PDFDocument.load(await readFile(file));
         const doc = await PDFDocument.create();
         (await doc.copyPages(src, indices)).forEach((p) => doc.addPage(p));
-        await savePdf(await doc.save(), file.name.replace(/\.pdf$/i, "_extracted.pdf"));
+        const defName = file.name.replace(/\.pdf$/i, "_extracted.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -705,6 +779,7 @@
           <div class="form-group"><label>Opacity</label><input type="number" id="wop" class="input" value="0.12" min="0.01" max="1" step="0.01"></div>
         </div>
       </div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="droplets"></i>Apply Watermark</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
     $("#out", el).appendChild(makeOutputSel());
@@ -715,6 +790,10 @@
       $("#fn", el).textContent = file.name;
       $("#opts", el).classList.remove("hidden");
       $("#go", el).disabled = false;
+      const wrap = $("#oname-wrap", el);
+      wrap.innerHTML = "";
+      wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_watermarked.pdf")));
+      lucide.createIcons();
     }
 
     $("#go", el).addEventListener("click", async () => {
@@ -747,7 +826,9 @@
             });
           }
         }
-        await savePdf(await doc.save(), file.name.replace(/\.pdf$/i, "_watermarked.pdf"));
+        const defName = file.name.replace(/\.pdf$/i, "_watermarked.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
@@ -773,6 +854,7 @@
           <div class="form-group"><label>Font size</label><input type="number" id="fsz" class="input" value="11" min="6" max="72"></div>
         </div>
       </div>
+      <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="hash"></i>Add Numbers</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
     $("#out", el).appendChild(makeOutputSel());
@@ -786,6 +868,10 @@
         $("#pc", el).textContent = d.getPageCount();
         $("#opts", el).classList.remove("hidden");
         $("#go", el).disabled = false;
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_numbered.pdf")));
+        lucide.createIcons();
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     }
 
@@ -812,7 +898,9 @@
           else x = margin;
           page.drawText(txt, { x, y, size: fontSize, font, color: rgb(0.35, 0.35, 0.35) });
         });
-        await savePdf(await doc.save(), file.name.replace(/\.pdf$/i, "_numbered.pdf"));
+        const defName = file.name.replace(/\.pdf$/i, "_numbered.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
   }
