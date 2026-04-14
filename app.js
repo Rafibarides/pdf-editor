@@ -33,6 +33,7 @@
     { id: "extract", icon: "file-output", name: "Extract Pages", desc: "Pull specific pages from a PDF", accent: "pink" },
     { id: "watermark", icon: "droplets", name: "Add Watermark", desc: "Overlay text across every page", accent: "blue" },
     { id: "pagenums", icon: "hash", name: "Page Numbers", desc: "Add numbering to your pages", accent: "pink" },
+    { id: "textbox", icon: "type", name: "Add Textbox", desc: "Place custom text anywhere on a page", accent: "blue" },
   ];
 
   const RENDERERS = {
@@ -44,6 +45,7 @@
     extract: renderExtract,
     watermark: renderWatermark,
     pagenums: renderPageNums,
+    textbox: renderTextbox,
   };
 
   /* ================================================
@@ -270,11 +272,25 @@
           <span class="file-icon"><i data-lucide="file-text"></i></span>
           <span class="file-name">${f.name}</span>
           <span class="file-size">${(f.size / 1024).toFixed(0)} KB</span>
+          <span class="file-reorder">
+            <button class="file-move" data-dir="up" data-i="${i}" ${i === 0 ? "disabled" : ""}><i data-lucide="chevron-up"></i></button>
+            <button class="file-move" data-dir="down" data-i="${i}" ${i === files.length - 1 ? "disabled" : ""}><i data-lucide="chevron-down"></i></button>
+          </span>
           <button class="file-remove" data-i="${i}"><i data-lucide="x"></i></button>
         </div>`).join("");
 
       fl.querySelectorAll(".file-remove").forEach((b) =>
         b.addEventListener("click", () => { files.splice(+b.dataset.i, 1); renderList(); })
+      );
+
+      fl.querySelectorAll(".file-move").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const i = +b.dataset.i;
+          const dir = b.dataset.dir;
+          if (dir === "up" && i > 0) { [files[i - 1], files[i]] = [files[i], files[i - 1]]; renderList(); }
+          if (dir === "down" && i < files.length - 1) { [files[i], files[i + 1]] = [files[i + 1], files[i]]; renderList(); }
+        })
       );
 
       let dragI = null;
@@ -289,6 +305,62 @@
           if (dragI !== null && dragI !== j) { const [m] = files.splice(dragI, 1); files.splice(j, 0, m); renderList(); }
         });
       });
+
+      /* Touch-based reordering */
+      let touchDragI = null, touchClone = null, touchTargetI = null;
+      fl.querySelectorAll(".file-grip").forEach((grip) => {
+        grip.addEventListener("touchstart", (e) => {
+          e.preventDefault();
+          const item = grip.closest(".file-item");
+          touchDragI = +item.dataset.i;
+          touchTargetI = null;
+          item.classList.add("dragging");
+
+          touchClone = item.cloneNode(true);
+          touchClone.classList.add("file-item-ghost");
+          const rect = item.getBoundingClientRect();
+          touchClone.style.width = rect.width + "px";
+          touchClone.style.left = rect.left + "px";
+          touchClone.style.top = rect.top + "px";
+          document.body.appendChild(touchClone);
+        }, { passive: false });
+      });
+
+      fl.addEventListener("touchmove", (e) => {
+        if (touchDragI === null) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        if (touchClone) touchClone.style.top = (touch.clientY - 20) + "px";
+
+        fl.querySelectorAll(".file-item").forEach((it) => it.classList.remove("drag-target"));
+        touchTargetI = null;
+        if (touchClone) touchClone.style.pointerEvents = "none";
+        const hit = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (touchClone) touchClone.style.pointerEvents = "";
+        if (hit) {
+          const fi = hit.closest(".file-item");
+          if (fi && +fi.dataset.i !== touchDragI) {
+            fi.classList.add("drag-target");
+            touchTargetI = +fi.dataset.i;
+          }
+        }
+      }, { passive: false });
+
+      const touchEnd = () => {
+        if (touchDragI === null) return;
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        fl.querySelectorAll(".file-item").forEach((it) => it.classList.remove("dragging", "drag-target"));
+        if (touchTargetI !== null && touchTargetI !== touchDragI) {
+          const [m] = files.splice(touchDragI, 1);
+          files.splice(touchTargetI, 0, m);
+        }
+        touchDragI = null;
+        touchTargetI = null;
+        renderList();
+      };
+      fl.addEventListener("touchend", touchEnd, { passive: false });
+      fl.addEventListener("touchcancel", touchEnd, { passive: false });
+
       lucide.createIcons();
     }
 
@@ -588,28 +660,38 @@
       $("#sig-modal-close").onclick = () => modal.classList.add("hidden");
     });
 
-    /* --- Drag & resize signature overlay --- */
+    /* --- Drag & resize signature overlay (mouse + touch) --- */
     let dragging = false, resizing = false, dOff = {}, rStart = {};
 
-    sigOv.addEventListener("mousedown", (e) => {
+    function getPointer(e) {
+      if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    function startDrag(e) {
       if (e.target.id === "sigRz") return;
       dragging = true;
+      const ptr = getPointer(e);
       const r = sigOv.getBoundingClientRect();
-      dOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+      dOff = { x: ptr.x - r.left, y: ptr.y - r.top };
       e.preventDefault();
-    });
+    }
 
-    $("#sigRz", el).addEventListener("mousedown", (e) => {
+    function startResize(e) {
       resizing = true;
-      rStart = { x: e.clientX, w: sigOv.offsetWidth, h: sigOv.offsetHeight };
+      const ptr = getPointer(e);
+      rStart = { x: ptr.x, w: sigOv.offsetWidth, h: sigOv.offsetHeight };
       e.stopPropagation();
       e.preventDefault();
-    });
+    }
 
-    document.addEventListener("mousemove", (e) => {
+    function onPointerMove(e) {
+      if (!dragging && !resizing) return;
+      e.preventDefault();
+      const ptr = getPointer(e);
       if (dragging) {
         const cr = pvw.getBoundingClientRect();
-        let x = e.clientX - cr.left - dOff.x, y = e.clientY - cr.top - dOff.y;
+        let x = ptr.x - cr.left - dOff.x, y = ptr.y - cr.top - dOff.y;
         x = Math.max(0, Math.min(x, pvw.clientWidth - sigOv.offsetWidth));
         y = Math.max(0, Math.min(y, pvw.clientHeight - sigOv.offsetHeight));
         sigOv.style.left = x + "px";
@@ -617,14 +699,28 @@
         sigPos.x = x; sigPos.y = y;
       }
       if (resizing) {
-        const nw = Math.max(60, rStart.w + (e.clientX - rStart.x));
+        const nw = Math.max(60, rStart.w + (ptr.x - rStart.x));
         const nh = nw * (rStart.h / rStart.w);
         sigOv.style.width = nw + "px";
         sigOv.style.height = nh + "px";
         sigPos.w = nw; sigPos.h = nh;
       }
-    });
-    document.addEventListener("mouseup", () => { dragging = false; resizing = false; });
+    }
+
+    function onPointerUp() { dragging = false; resizing = false; }
+
+    sigOv.addEventListener("mousedown", startDrag);
+    sigOv.addEventListener("touchstart", startDrag, { passive: false });
+
+    const sigRz = $("#sigRz", el);
+    sigRz.addEventListener("mousedown", startResize);
+    sigRz.addEventListener("touchstart", startResize, { passive: false });
+
+    document.addEventListener("mousemove", onPointerMove);
+    document.addEventListener("touchmove", onPointerMove, { passive: false });
+    document.addEventListener("mouseup", onPointerUp);
+    document.addEventListener("touchend", onPointerUp);
+    document.addEventListener("touchcancel", onPointerUp);
 
     /* --- Apply signature --- */
     $("#apply", el).addEventListener("click", async () => {
@@ -899,6 +995,237 @@
           page.drawText(txt, { x, y, size: fontSize, font, color: rgb(0.35, 0.35, 0.35) });
         });
         const defName = file.name.replace(/\.pdf$/i, "_numbered.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+  }
+
+  /* ================================================
+     Tool: Add Textbox
+  ================================================ */
+  function renderTextbox(el) {
+    let pdfFile = null, pdfJsDoc = null, currentPage = 0, totalPages = 0;
+    let tbPos = { x: 40, y: 40 };
+    let tbScale = 1, initialWidth = 220, baseFontSize = 16;
+    const SCALE = 1.5;
+
+    el.innerHTML = `
+      <div class="tool-head"><h2>Add Textbox</h2><p>Type text, position it on any page, resize to scale, then apply.</p></div>
+      <div id="dz"></div>
+      <div id="ws" class="hidden">
+        <div class="sign-toolbar">
+          <div class="tb-controls">
+            <div class="form-group-inline"><label>Size</label><input type="number" id="tbSize" class="input input-sm" value="16" min="6" max="120"></div>
+            <div class="form-group-inline"><label>Color</label><input type="color" id="tbColor" class="input-color" value="#000000"></div>
+            <button class="btn btn-secondary" id="addTb"><i data-lucide="type"></i>Place Text</button>
+          </div>
+          <div class="page-nav">
+            <button class="btn-icon" id="prevP"><i data-lucide="chevron-left"></i></button>
+            <span id="pgInd">1 / 1</span>
+            <button class="btn-icon" id="nextP"><i data-lucide="chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="pdf-preview-wrap" id="pvw">
+          <canvas id="pcanvas"></canvas>
+          <div id="tbOv" class="text-overlay hidden">
+            <div class="text-ov-handle"><i data-lucide="grip-horizontal"></i></div>
+            <textarea class="text-ov-input" spellcheck="false" placeholder="Type here\u2026"></textarea>
+            <div class="resize-h" id="tbRz"></div>
+          </div>
+        </div>
+        <div id="oname-wrap" class="mt-1"></div>
+        <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="apply" disabled><i data-lucide="check"></i>Apply &amp; Download</button></div>
+      </div>`;
+
+    const pvw = $("#pvw", el), canvas = $("#pcanvas", el);
+    const tbOv = $("#tbOv", el), tbInput = $(".text-ov-input", el);
+    const tbHandleEl = $(".text-ov-handle", el);
+    $("#out", el).appendChild(makeOutputSel());
+    $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
+    lucide.createIcons();
+
+    async function onFile(files) {
+      pdfFile = files[0];
+      showLoading("Loading PDF\u2026");
+      try {
+        pdfJsDoc = await pdfjsLib.getDocument({ data: await readFile(pdfFile) }).promise;
+        totalPages = pdfJsDoc.numPages;
+        currentPage = 0;
+        $("#dz", el).classList.add("hidden");
+        $("#ws", el).classList.remove("hidden");
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(pdfFile.name.replace(/\.pdf$/i, "_edited.pdf")));
+        lucide.createIcons();
+        await renderPg();
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    }
+
+    async function renderPg() {
+      const pg = await pdfJsDoc.getPage(currentPage + 1);
+      const vp = pg.getViewport({ scale: SCALE });
+      canvas.width = vp.width;
+      canvas.height = vp.height;
+      await pg.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      $("#pgInd", el).textContent = `${currentPage + 1} / ${totalPages}`;
+      $("#prevP", el).disabled = currentPage === 0;
+      $("#nextP", el).disabled = currentPage === totalPages - 1;
+    }
+
+    $("#prevP", el).addEventListener("click", async () => { if (currentPage > 0) { currentPage--; await renderPg(); } });
+    $("#nextP", el).addEventListener("click", async () => { if (currentPage < totalPages - 1) { currentPage++; await renderPg(); } });
+
+    function getVisualFontSize() {
+      return baseFontSize * tbScale * canvas.clientWidth * SCALE / canvas.width;
+    }
+
+    function updateOverlayStyle() {
+      const vfs = getVisualFontSize();
+      tbInput.style.fontSize = vfs + "px";
+      tbInput.style.lineHeight = (vfs * 1.35) + "px";
+      tbInput.style.color = $("#tbColor", el).value;
+      tbInput.style.height = "auto";
+      tbInput.style.height = Math.max(tbInput.scrollHeight, vfs * 1.5) + "px";
+    }
+
+    $("#addTb", el).addEventListener("click", () => {
+      baseFontSize = parseInt($("#tbSize", el).value) || 16;
+      tbScale = 1;
+      tbPos = { x: 40, y: 40 };
+      initialWidth = Math.min(220, pvw.clientWidth - 80);
+
+      tbOv.classList.remove("hidden");
+      tbOv.style.left = tbPos.x + "px";
+      tbOv.style.top = tbPos.y + "px";
+      tbOv.style.width = initialWidth + "px";
+
+      updateOverlayStyle();
+      tbInput.value = "";
+      tbInput.focus();
+      $("#apply", el).disabled = false;
+      toast("Textbox placed \u2014 type and drag to position", "success");
+    });
+
+    $("#tbSize", el).addEventListener("input", () => {
+      baseFontSize = parseInt($("#tbSize", el).value) || 16;
+      updateOverlayStyle();
+    });
+    $("#tbColor", el).addEventListener("input", updateOverlayStyle);
+    tbInput.addEventListener("input", updateOverlayStyle);
+
+    /* --- Drag & resize (mouse + touch) --- */
+    let dragging = false, resizing = false, dOff = {}, rStart = {};
+
+    function getPointer(e) {
+      if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    function startDrag(e) {
+      dragging = true;
+      const ptr = getPointer(e);
+      const r = tbOv.getBoundingClientRect();
+      dOff = { x: ptr.x - r.left, y: ptr.y - r.top };
+      e.preventDefault();
+    }
+
+    function startResize(e) {
+      resizing = true;
+      const ptr = getPointer(e);
+      rStart = { x: ptr.x, w: tbOv.offsetWidth };
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    function onPointerMove(e) {
+      if (!dragging && !resizing) return;
+      e.preventDefault();
+      const ptr = getPointer(e);
+      if (dragging) {
+        const cr = pvw.getBoundingClientRect();
+        let x = ptr.x - cr.left - dOff.x, y = ptr.y - cr.top - dOff.y;
+        x = Math.max(0, Math.min(x, pvw.clientWidth - tbOv.offsetWidth));
+        y = Math.max(0, Math.min(y, pvw.clientHeight - tbOv.offsetHeight));
+        tbOv.style.left = x + "px";
+        tbOv.style.top = y + "px";
+        tbPos.x = x; tbPos.y = y;
+      }
+      if (resizing) {
+        const nw = Math.max(60, rStart.w + (ptr.x - rStart.x));
+        tbScale = nw / initialWidth;
+        tbOv.style.width = nw + "px";
+        updateOverlayStyle();
+      }
+    }
+
+    function onPointerUp() { dragging = false; resizing = false; }
+
+    tbHandleEl.addEventListener("mousedown", startDrag);
+    tbHandleEl.addEventListener("touchstart", startDrag, { passive: false });
+
+    const tbRz = $("#tbRz", el);
+    tbRz.addEventListener("mousedown", startResize);
+    tbRz.addEventListener("touchstart", startResize, { passive: false });
+
+    document.addEventListener("mousemove", onPointerMove);
+    document.addEventListener("touchmove", onPointerMove, { passive: false });
+    document.addEventListener("mouseup", onPointerUp);
+    document.addEventListener("touchend", onPointerUp);
+    document.addEventListener("touchcancel", onPointerUp);
+
+    /* --- Apply text --- */
+    $("#apply", el).addEventListener("click", async () => {
+      const text = tbInput.value.trim();
+      if (!text || !pdfFile) { toast("Enter some text first", "error"); return; }
+      showLoading("Adding text\u2026");
+      try {
+        const doc = await PDFDocument.load(await readFile(pdfFile));
+        const page = doc.getPage(currentPage);
+        const { width: pgW, height: pgH } = page.getSize();
+        const sx = pgW / canvas.clientWidth;
+        const sy = pgH / canvas.clientHeight;
+        const font = await doc.embedFont(StandardFonts.Helvetica);
+
+        const pdfFontSize = baseFontSize * tbScale;
+        const lineHeight = pdfFontSize * 1.35;
+
+        const pvwRect = pvw.getBoundingClientRect();
+        const bodyRect = tbInput.getBoundingClientRect();
+        const textLeft = (bodyRect.left - pvwRect.left) * sx;
+        const textTop = (bodyRect.top - pvwRect.top) * sy;
+        const maxWidth = tbInput.clientWidth * sx;
+
+        const hex = $("#tbColor", el).value;
+        const cr = parseInt(hex.slice(1, 3), 16) / 255;
+        const cg = parseInt(hex.slice(3, 5), 16) / 255;
+        const cb = parseInt(hex.slice(5, 7), 16) / 255;
+        const color = rgb(cr, cg, cb);
+
+        const wrappedLines = [];
+        for (const rawLine of text.split("\n")) {
+          if (!rawLine.trim()) { wrappedLines.push(""); continue; }
+          let cur = "";
+          for (const word of rawLine.split(" ")) {
+            const test = cur ? cur + " " + word : word;
+            if (font.widthOfTextAtSize(test, pdfFontSize) > maxWidth && cur) {
+              wrappedLines.push(cur);
+              cur = word;
+            } else {
+              cur = test;
+            }
+          }
+          if (cur) wrappedLines.push(cur);
+        }
+
+        wrappedLines.forEach((line, i) => {
+          const pdfY = pgH - textTop - pdfFontSize * 0.82 - i * lineHeight;
+          if (line) {
+            page.drawText(line, { x: textLeft, y: pdfY, size: pdfFontSize, font, color });
+          }
+        });
+
+        const defName = pdfFile.name.replace(/\.pdf$/i, "_edited.pdf");
         const outName = getOutputName(el, defName);
         await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
