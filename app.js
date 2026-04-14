@@ -1250,11 +1250,12 @@
     const textboxes = [];
 
     el.innerHTML = `
-      <div class="tool-head"><h2>Add Textbox</h2><p>Click and drag on the page to draw a textbox. Add as many as you need.</p></div>
+      <div class="tool-head"><h2>Add Textbox</h2><p>Tap the button or draw on the page to add textboxes. Drag the grip to move.</p></div>
       <div id="dz"></div>
       <div id="ws" class="hidden">
         <div class="sign-toolbar">
           <div class="tb-controls">
+            <button class="btn btn-secondary" id="addTbBtn"><i data-lucide="plus"></i>Add Textbox</button>
             <div class="form-group-inline"><label>Size</label><input type="number" id="tbSize" class="input input-sm" value="14" min="6" max="120"></div>
             <div class="form-group-inline"><label>Color</label><input type="color" id="tbColor" class="input-color" value="#000000"></div>
           </div>
@@ -1316,6 +1317,9 @@
     $("#prevP", el).addEventListener("click", async () => { if (currentPage > 0) { clearAllBoxes(); currentPage--; await renderPg(); } });
     $("#nextP", el).addEventListener("click", async () => { if (currentPage < totalPages - 1) { clearAllBoxes(); currentPage++; await renderPg(); } });
 
+    /* Tap canvas = deselect all textboxes */
+    canvas.addEventListener("click", () => { if (document.activeElement?.closest && document.activeElement.closest(".text-overlay")) document.activeElement.blur(); });
+
     function getPtr(e) {
       if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
       return { x: e.clientX, y: e.clientY };
@@ -1325,23 +1329,28 @@
       return pdfPt * canvas.clientWidth * SCALE / canvas.width;
     }
 
-    /* --- Draw-to-create --- */
+    /* --- "Add Textbox" button (primary mobile method) --- */
+    $("#addTbBtn", el).addEventListener("click", () => {
+      const w = Math.min(200, pvw.clientWidth * 0.55);
+      const h = Math.min(80, pvw.clientHeight * 0.15);
+      const x = (pvw.clientWidth - w) / 2;
+      const y = (pvw.clientHeight - h) / 3;
+      createTextbox(x, y, w, Math.max(h, 40));
+    });
+
+    /* --- Draw-to-create (mouse only — touch is left free for scroll/zoom) --- */
     let drawing = false, drawStart = null;
     let activeDrag = null, activeResize = null;
 
-    function onPvwDown(e) {
+    pvw.addEventListener("mousedown", (e) => {
       if (e.target !== canvas) return;
       drawing = true;
-      const ptr = getPtr(e);
       const cr = pvw.getBoundingClientRect();
-      drawStart = { x: ptr.x - cr.left, y: ptr.y - cr.top };
+      drawStart = { x: e.clientX - cr.left, y: e.clientY - cr.top };
       drawRectEl.classList.remove("hidden");
       Object.assign(drawRectEl.style, { left: drawStart.x + "px", top: drawStart.y + "px", width: "0px", height: "0px" });
       e.preventDefault();
-    }
-
-    pvw.addEventListener("mousedown", onPvwDown);
-    pvw.addEventListener("touchstart", onPvwDown, { passive: false });
+    });
 
     function onDocMove(e) {
       const ptr = getPtr(e);
@@ -1399,7 +1408,7 @@
 
       const box = document.createElement("div");
       box.className = "text-overlay";
-      box.innerHTML = `<textarea class="text-ov-input" spellcheck="false" placeholder="Type\u2026"></textarea><button class="text-ov-del"><i data-lucide="x"></i></button><div class="resize-h"></div>`;
+      box.innerHTML = `<div class="text-ov-grip"><i data-lucide="grip-horizontal"></i></div><textarea class="text-ov-input" spellcheck="false" placeholder="Type\u2026"></textarea><button class="text-ov-del"><i data-lucide="x"></i></button><div class="resize-h"></div>`;
       Object.assign(box.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
 
       const ta = box.querySelector(".text-ov-input");
@@ -1424,16 +1433,16 @@
         if (!textboxes.length) $("#apply", el).disabled = true;
       });
 
-      function boxDown(e) {
-        if (e.target === ta || e.target.closest(".resize-h") || e.target.closest(".text-ov-del")) return;
+      const grip = box.querySelector(".text-ov-grip");
+      function gripDown(e) {
         const ptr = getPtr(e);
         const r = box.getBoundingClientRect();
         activeDrag = { tb, ox: ptr.x - r.left, oy: ptr.y - r.top };
         e.preventDefault();
         e.stopPropagation();
       }
-      box.addEventListener("mousedown", boxDown);
-      box.addEventListener("touchstart", boxDown, { passive: false });
+      grip.addEventListener("mousedown", gripDown);
+      grip.addEventListener("touchstart", gripDown, { passive: false });
 
       const rz = box.querySelector(".resize-h");
       function rzDown(e) {

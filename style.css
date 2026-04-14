@@ -632,20 +632,34 @@ img { display: block; max-width: 100%; }
   border: 1.5px dashed rgba(59,130,246,.55);
   border-radius: 3px;
   background: transparent;
+  display: flex;
+  flex-direction: column;
+  touch-action: auto;
+}
+
+.text-ov-grip {
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(59,130,246,.45);
   cursor: move;
   touch-action: none;
-  padding: 2px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(59,130,246,.2);
 }
+.text-ov-grip svg { width: 14px; height: 14px; pointer-events: none; }
 
 .text-ov-input {
   display: block;
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   border: none;
   outline: none;
   background: transparent;
   resize: none;
-  padding: 2px 3px;
+  padding: 2px 4px;
   font-family: Helvetica, Arial, sans-serif;
   overflow: hidden;
   cursor: text;
@@ -668,12 +682,8 @@ img { display: block; max-width: 100%; }
   cursor: pointer;
   box-shadow: var(--shadow-sm);
   z-index: 2;
-  opacity: 0;
-  transition: opacity .15s;
 }
 .text-ov-del svg { width: 12px; height: 12px; }
-.text-overlay:hover .text-ov-del,
-.text-overlay:focus-within .text-ov-del { opacity: 1; }
 
 .text-overlay .resize-h {
   position: absolute;
@@ -687,11 +697,14 @@ img { display: block; max-width: 100%; }
   cursor: nwse-resize;
   box-shadow: var(--shadow-xs);
   z-index: 2;
+  touch-action: none;
 }
 
 @media (pointer: coarse) {
-  .text-ov-del { opacity: 1; width: 26px; height: 26px; top: -13px; right: -13px; }
-  .text-overlay .resize-h { width: 24px; height: 24px; bottom: -12px; right: -12px; }
+  .text-ov-grip { height: 28px; }
+  .text-ov-del { width: 28px; height: 28px; top: -14px; right: -14px; }
+  .text-ov-del svg { width: 14px; height: 14px; }
+  .text-overlay .resize-h { width: 28px; height: 28px; bottom: -14px; right: -14px; }
 }
 
 /* ---------- Textbox Toolbar Controls ---------- */
