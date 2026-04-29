@@ -806,16 +806,29 @@
     const SCALE = 1.5;
 
     el.innerHTML = `
-      <div class="tool-head"><h2>Sign PDF</h2><p>Draw your signature, then position it on any page.</p></div>
+      <div class="tool-head"><h2>Sign PDF</h2><p>Draw or type your signature, then position it on any page.</p></div>
       <div id="dz"></div>
       <div id="ws" class="hidden">
         <div class="sign-toolbar">
-          <button class="btn btn-secondary" id="drawBtn"><i data-lucide="pen-tool"></i>Draw Signature</button>
+          <div class="sig-btn-group">
+            <button class="btn btn-secondary" id="drawBtn"><i data-lucide="pen-tool"></i>Draw</button>
+            <button class="btn btn-secondary" id="typeBtn"><i data-lucide="type"></i>Type</button>
+          </div>
           <div class="page-nav">
             <button class="btn-icon" id="prevP"><i data-lucide="chevron-left"></i></button>
             <span id="pgInd">1 / 1</span>
             <button class="btn-icon" id="nextP"><i data-lucide="chevron-right"></i></button>
           </div>
+        </div>
+        <div id="typeSigPanel" class="sig-type-panel hidden">
+          <input type="text" id="sigText" class="input" placeholder="Type your name\u2026" autocomplete="off">
+          <div class="sig-font-options">
+            <button class="sig-font-btn active" data-font="'Great Vibes', cursive">Elegant</button>
+            <button class="sig-font-btn" data-font="'Dancing Script', cursive">Flowing</button>
+            <button class="sig-font-btn" data-font="'Caveat', cursive">Casual</button>
+          </div>
+          <div class="sig-type-preview"><canvas id="sigTypeCanvas" height="70"></canvas></div>
+          <button class="btn btn-primary" id="sigTypeUse" disabled>Use This Signature</button>
         </div>
         <div class="pdf-preview-wrap" id="pvw"><canvas id="pcanvas"></canvas><div id="sigOv" class="sig-overlay hidden"><img id="sigImg" src="" alt=""><div class="resize-h" id="sigRz"></div></div></div>
         <div id="oname-wrap" class="mt-1"></div>
@@ -898,6 +911,68 @@
         toast("Signature ready \u2014 drag to position", "success");
       };
       $("#sig-modal-close").onclick = () => modal.classList.add("hidden");
+    });
+
+    /* --- Type signature panel --- */
+    let typedFont = "'Great Vibes', cursive";
+    const typePanel = $("#typeSigPanel", el);
+    const sigTextInput = $("#sigText", el);
+    const sigTypeCanvas = $("#sigTypeCanvas", el);
+    const sigTypeCtx = sigTypeCanvas.getContext("2d");
+
+    $("#typeBtn", el).addEventListener("click", () => {
+      typePanel.classList.toggle("hidden");
+    });
+
+    function renderTypedPreview() {
+      const text = sigTextInput.value.trim();
+      sigTypeCanvas.width = sigTypeCanvas.parentElement.clientWidth || 400;
+      sigTypeCtx.clearRect(0, 0, sigTypeCanvas.width, sigTypeCanvas.height);
+      $("#sigTypeUse", el).disabled = !text;
+      if (!text) return;
+      const fontSize = 48;
+      sigTypeCtx.font = `${fontSize}px ${typedFont}`;
+      sigTypeCtx.fillStyle = "#1E293B";
+      sigTypeCtx.textBaseline = "middle";
+      sigTypeCtx.fillText(text, 12, sigTypeCanvas.height / 2);
+    }
+
+    sigTextInput.addEventListener("input", renderTypedPreview);
+
+    typePanel.querySelectorAll(".sig-font-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        typePanel.querySelectorAll(".sig-font-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        typedFont = btn.dataset.font;
+        renderTypedPreview();
+      });
+    });
+
+    $("#sigTypeUse", el).addEventListener("click", () => {
+      const text = sigTextInput.value.trim();
+      if (!text) return;
+      const fontSize = 64;
+      const c = document.createElement("canvas");
+      const ctx2 = c.getContext("2d");
+      ctx2.font = `${fontSize}px ${typedFont}`;
+      const metrics = ctx2.measureText(text);
+      const w = Math.ceil(metrics.width) + 24;
+      const h = Math.ceil(fontSize * 1.6);
+      c.width = w; c.height = h;
+      ctx2.font = `${fontSize}px ${typedFont}`;
+      ctx2.fillStyle = "#1E293B";
+      ctx2.textBaseline = "middle";
+      ctx2.fillText(text, 12, h / 2);
+
+      signatureDataUrl = c.toDataURL("image/png");
+      typePanel.classList.add("hidden");
+      sigImg.src = signatureDataUrl;
+      sigOv.classList.remove("hidden");
+      sigPos.w = Math.min(w * 0.6, pvw.clientWidth * 0.4);
+      sigPos.h = sigPos.w * (h / w);
+      Object.assign(sigOv.style, { left: sigPos.x + "px", top: sigPos.y + "px", width: sigPos.w + "px", height: sigPos.h + "px" });
+      $("#apply", el).disabled = false;
+      toast("Signature ready \u2014 drag to position", "success");
     });
 
     /* --- Drag & resize signature overlay (mouse + touch) --- */

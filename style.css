@@ -617,6 +617,44 @@ img { display: block; max-width: 100%; }
   box-shadow: var(--shadow-xs);
 }
 
+/* ---------- Type Signature Panel ---------- */
+.sig-btn-group { display: flex; gap: .4rem; }
+
+.sig-type-panel {
+  background: var(--border-light);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.sig-font-options {
+  display: flex;
+  gap: .4rem;
+  margin: .75rem 0;
+  flex-wrap: wrap;
+}
+.sig-font-btn {
+  padding: .4rem .75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: .85rem;
+  background: var(--surface);
+  transition: border-color .15s, color .15s, background .15s;
+  cursor: pointer;
+}
+.sig-font-btn.active {
+  border-color: var(--blue);
+  color: var(--blue-dark);
+  background: var(--blue-light);
+}
+.sig-type-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  padding: .35rem;
+  margin-bottom: .75rem;
+}
+.sig-type-preview canvas { display: block; width: 100%; height: 70px; }
+
 /* ---------- Draw Rectangle (temporary) ---------- */
 .draw-rect {
   position: absolute;
