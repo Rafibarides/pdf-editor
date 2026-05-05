@@ -37,6 +37,7 @@
     { id: "imgconvert", icon: "repeat", name: "Image Converter", desc: "Convert images between JPG, PNG, and WEBP", accent: "pink" },
     { id: "imgresize", icon: "scaling", name: "Image Resize", desc: "Resize by width or set a file size limit", accent: "blue" },
     { id: "colorpicker", icon: "pipette", name: "Color Picker", desc: "Pick colors from any image and build a palette", accent: "pink" },
+    { id: "compress", icon: "minimize-2", name: "Compress PDF", desc: "Reduce file size for easy sharing", accent: "blue" },
   ];
 
   const RENDERERS = {
@@ -52,6 +53,7 @@
     imgconvert: renderImgConvert,
     imgresize: renderImgResize,
     colorpicker: renderColorPicker,
+    compress: renderCompress,
   };
 
   /* ================================================
@@ -1884,6 +1886,524 @@
       });
       lucide.createIcons();
     }
+  }
+
+  /* ================================================
+     Tool: Compress PDF
+  ================================================ */
+  function renderCompress(el) {
+    let file = null;
+    el.innerHTML = `
+      <div class="tool-head"><h2>Compress PDF</h2><p>Reduce PDF file size by re-rendering pages as compressed images. Optionally set a target size.</p></div>
+      <div id="dz"></div>
+      <div id="opts" class="hidden">
+        <div class="info-panel">
+          <div class="info-row"><span>File</span><span id="fn"></span></div>
+          <div class="info-row"><span>Original size</span><span id="origSz"></span></div>
+          <div class="info-row"><span>Pages</span><span id="pgCnt"></span></div>
+        </div>
+        <div class="inline-fields mt-1">
+          <div class="form-group"><label>Quality</label>
+            <div class="select-wrap"><select id="cQual" class="input">
+              <option value="high">High (best quality)</option>
+              <option value="medium" selected>Medium (balanced)</option>
+              <option value="low">Low (smallest file)</option>
+            </select></div>
+          </div>
+          <div class="form-group"><label>Target size (KB, optional)</label><input type="number" id="targetKB" class="input" placeholder="e.g. 500" min="50"></div>
+        </div>
+        <p class="info-hint mt-half">Leave target size blank to compress with the selected quality. Set a target to keep shrinking until the file fits.</p>
+        <div id="oname-wrap" class="mt-1"></div>
+      </div>
+      <div id="result" class="info-panel hidden mt-1">
+        <div class="info-row"><span>New size</span><span id="newSz"></span></div>
+        <div class="info-row"><span>Reduction</span><span id="reduction"></span></div>
+      </div>
+      <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="minimize-2"></i>Compress</button></div>`;
+    $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", onFiles: onFile }));
+    $("#out", el).appendChild(makeOutputSel());
+    lucide.createIcons();
+
+    async function onFile(files) {
+      file = files[0];
+      showLoading("Reading PDF\u2026");
+      try {
+        const bytes = await readFile(file);
+        const pdfJsDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+        $("#fn", el).textContent = file.name;
+        $("#origSz", el).textContent = formatBytes(file.size);
+        $("#pgCnt", el).textContent = pdfJsDoc.numPages;
+        $("#opts", el).classList.remove("hidden");
+        $("#result", el).classList.add("hidden");
+        $("#go", el).disabled = false;
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_compressed.pdf")));
+        lucide.createIcons();
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    }
+
+    $("#go", el).addEventListener("click", async () => {
+      if (!file) return;
+      showLoading("Compressing PDF\u2026");
+      try {
+        const bytes = await readFile(file);
+        const pdfJsDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+        const numPages = pdfJsDoc.numPages;
+        const qualSel = $("#cQual", el).value;
+        const targetKB = parseInt($("#targetKB", el).value) || 0;
+        const targetBytes = targetKB > 0 ? targetKB * 1024 : 0;
+
+        const qualMap = { high: 0.82, medium: 0.55, low: 0.3 };
+        const scaleMap = { high: 2, medium: 1.5, low: 1 };
+        let quality = qualMap[qualSel];
+        let renderScale = scaleMap[qualSel];
+
+        let resultBlob = null;
+
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const newDoc = await PDFDocument.create();
+
+          for (let i = 0; i < numPages; i++) {
+            $("#loading-text").textContent = `Compressing page ${i + 1} / ${numPages}\u2026`;
+            const pg = await pdfJsDoc.getPage(i + 1);
+            const origVp = pg.getViewport({ scale: 1 });
+            const vp = pg.getViewport({ scale: renderScale });
+
+            const c = document.createElement("canvas");
+            c.width = vp.width;
+            c.height = vp.height;
+            await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+
+            const jpgBlob = await new Promise((res) => c.toBlob(res, "image/jpeg", quality));
+            const jpgBytes = new Uint8Array(await jpgBlob.arrayBuffer());
+            const img = await newDoc.embedJpg(jpgBytes);
+            const page = newDoc.addPage([origVp.width, origVp.height]);
+            page.drawImage(img, { x: 0, y: 0, width: origVp.width, height: origVp.height });
+          }
+
+          const savedBytes = await newDoc.save();
+          resultBlob = new Blob([savedBytes], { type: "application/pdf" });
+
+          if (!targetBytes || resultBlob.size <= targetBytes) break;
+
+          quality = Math.max(0.1, quality * 0.7);
+          renderScale = Math.max(0.5, renderScale * 0.85);
+        }
+
+        const newSize = resultBlob.size;
+        const pct = ((1 - newSize / file.size) * 100).toFixed(1);
+        $("#newSz", el).textContent = formatBytes(newSize);
+        $("#reduction", el).textContent = pct > 0 ? `${pct}% smaller` : "No reduction (already optimized)";
+        $("#result", el).classList.remove("hidden");
+
+        const defName = file.name.replace(/\.pdf$/i, "_compressed.pdf");
+        const outName = getOutputName(el, defName);
+        await saveBlobAs(resultBlob, outName.endsWith(".pdf") ? outName : outName + ".pdf");
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+  }
+
+  /* ================================================
+     Tool: Fill Form (hidden — not production ready)
+  ================================================ */
+  function renderFormFill(el) {
+    let pdfFile = null, pdfBytes = null, pdfJsDoc = null;
+    let currentPage = 0, totalPages = 0;
+    let mode = null; // "acroform" | "visual"
+    let acroFields = [];
+    let visualFields = []; // { id, el, x, y, w, h, placeholder }
+    let nextFieldId = 0;
+    const SCALE = 2;
+
+    el.innerHTML = `
+      <div class="tool-head"><h2>Fill Form</h2><p>Fill interactive PDF forms or type onto scanned forms. Auto-detects form type.</p></div>
+      <div id="dz"></div>
+      <div id="acroMode" class="hidden">
+        <div class="info-panel"><div class="info-row"><span>Mode</span><span>Interactive Form (AcroForm)</span></div><div class="info-row"><span>Fields detected</span><span id="afCount">0</span></div></div>
+        <div id="acroFields" class="acro-fields mt-1"></div>
+        <div id="oname-wrap" class="mt-1"></div>
+        <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="acroGo"><i data-lucide="check"></i>Fill &amp; Download</button></div>
+      </div>
+      <div id="visualMode" class="hidden">
+        <div class="sign-toolbar">
+          <div class="tb-controls">
+            <button class="btn btn-secondary" id="addFieldBtn"><i data-lucide="plus"></i>Add Field</button>
+            <div class="form-group-inline"><label>Size</label><input type="number" id="ffSize" class="input input-sm" value="11" min="6" max="36"></div>
+          </div>
+          <div class="page-nav">
+            <button class="btn-icon" id="prevP"><i data-lucide="chevron-left"></i></button>
+            <span id="pgInd">1 / 1</span>
+            <button class="btn-icon" id="nextP"><i data-lucide="chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="pdf-preview-wrap" id="pvw"><canvas id="pcanvas"></canvas></div>
+        <div id="oname-wrap2" class="mt-1"></div>
+        <div class="tool-actions"><div id="out2"></div><button class="btn btn-primary btn-lg" id="visualGo"><i data-lucide="check"></i>Fill &amp; Download</button></div>
+      </div>`;
+
+    $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF form here", onFiles: onFile }));
+    lucide.createIcons();
+
+    async function onFile(files) {
+      pdfFile = files[0];
+      showLoading("Analyzing form\u2026");
+      try {
+        pdfBytes = await readFile(pdfFile);
+        const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+        let hasAcro = false;
+        try {
+          const form = pdfDoc.getForm();
+          const fields = form.getFields();
+          if (fields.length > 0) { hasAcro = true; acroFields = fields; }
+        } catch (_) {}
+
+        if (hasAcro) {
+          mode = "acroform";
+          initAcroMode(pdfDoc);
+        } else {
+          mode = "visual";
+          await initVisualMode();
+        }
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    }
+
+    /* ========== ACROFORM MODE ========== */
+    function initAcroMode(pdfDoc) {
+      $("#dz", el).classList.add("hidden");
+      $("#acroMode", el).classList.remove("hidden");
+      $("#afCount", el).textContent = acroFields.length;
+
+      const container = $("#acroFields", el);
+      container.innerHTML = acroFields.map((field, i) => {
+        const type = field.constructor.name;
+        const name = field.getName();
+        if (type === "PDFTextField") {
+          const cur = field.getText() || "";
+          return `<div class="acro-field"><label>${name}</label><input type="text" class="input acro-input" data-i="${i}" value="${cur}" placeholder="${name}"></div>`;
+        } else if (type === "PDFCheckBox") {
+          const checked = field.isChecked() ? "checked" : "";
+          return `<div class="acro-field acro-field-check"><label><input type="checkbox" class="acro-check" data-i="${i}" ${checked}> ${name}</label></div>`;
+        } else if (type === "PDFDropdown") {
+          const opts = field.getOptions();
+          const sel = field.getSelected();
+          return `<div class="acro-field"><label>${name}</label><div class="select-wrap"><select class="input acro-select" data-i="${i}">${opts.map((o) => `<option ${sel.includes(o) ? "selected" : ""}>${o}</option>`).join("")}</select></div></div>`;
+        }
+        return "";
+      }).join("");
+
+      const wrap = $("#oname-wrap", el);
+      wrap.innerHTML = "";
+      wrap.appendChild(makeOutputName(pdfFile.name.replace(/\.pdf$/i, "_filled.pdf")));
+      if (!$("#out", el).children.length) $("#out", el).appendChild(makeOutputSel());
+      lucide.createIcons();
+    }
+
+    $("#acroGo", el).addEventListener("click", async () => {
+      showLoading("Filling form\u2026");
+      try {
+        const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+        const form = pdfDoc.getForm();
+        const fields = form.getFields();
+
+        el.querySelectorAll(".acro-input").forEach((inp) => {
+          const f = fields[+inp.dataset.i];
+          if (f && f.setText) f.setText(inp.value);
+        });
+        el.querySelectorAll(".acro-check").forEach((inp) => {
+          const f = fields[+inp.dataset.i];
+          if (f) { if (inp.checked) f.check(); else f.uncheck(); }
+        });
+        el.querySelectorAll(".acro-select").forEach((sel) => {
+          const f = fields[+sel.dataset.i];
+          if (f && f.select) f.select(sel.value);
+        });
+
+        form.flatten();
+        const defName = pdfFile.name.replace(/\.pdf$/i, "_filled.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await pdfDoc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+
+    /* ========== VISUAL MODE ========== */
+    const pvw = () => $("#pvw", el);
+    const canvas = () => $("#pcanvas", el);
+
+    async function initVisualMode() {
+      $("#dz", el).classList.add("hidden");
+      $("#visualMode", el).classList.remove("hidden");
+      pdfJsDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+      totalPages = pdfJsDoc.numPages;
+      currentPage = 0;
+
+      const wrap = $("#oname-wrap2", el);
+      wrap.innerHTML = "";
+      wrap.appendChild(makeOutputName(pdfFile.name.replace(/\.pdf$/i, "_filled.pdf")));
+      if (!$("#out2", el).children.length) $("#out2", el).appendChild(makeOutputSel());
+      lucide.createIcons();
+
+      await renderPage();
+      pvw().addEventListener("click", onCanvasClick);
+      await detectFields();
+    }
+
+    async function renderPage() {
+      const pg = await pdfJsDoc.getPage(currentPage + 1);
+      const vp = pg.getViewport({ scale: SCALE });
+      const c = canvas();
+      c.width = vp.width;
+      c.height = vp.height;
+      await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      c.style.cursor = "crosshair";
+      $("#pgInd", el).textContent = `${currentPage + 1} / ${totalPages}`;
+      $("#prevP", el).disabled = currentPage === 0;
+      $("#nextP", el).disabled = currentPage === totalPages - 1;
+    }
+
+    function clearVisualFields() {
+      visualFields.forEach((f) => f.el.remove());
+      visualFields.length = 0;
+    }
+
+    $("#prevP", el).addEventListener("click", async () => { if (currentPage > 0) { clearVisualFields(); currentPage--; await renderPage(); await detectFields(); } });
+    $("#nextP", el).addEventListener("click", async () => { if (currentPage < totalPages - 1) { clearVisualFields(); currentPage++; await renderPage(); await detectFields(); } });
+
+    /* --- Field detection using pdf.js text extraction --- */
+    async function detectFields() {
+      showLoading("Detecting form fields\u2026");
+      try {
+        const pg = await pdfJsDoc.getPage(currentPage + 1);
+        const textContent = await pg.getTextContent();
+        const vp = pg.getViewport({ scale: SCALE });
+        const c = canvas();
+        const displayScale = c.clientWidth / c.width;
+
+        const items = textContent.items.filter((it) => it.str !== undefined);
+        if (items.length < 3) {
+          await detectFieldsOCR();
+          return;
+        }
+
+        const pageW = vp.width * displayScale;
+
+        const lineGroups = {};
+        for (const item of items) {
+          const tx = pdfjsLib.Util.transform(vp.transform, item.transform);
+          const x = tx[4] * displayScale;
+          const y = tx[5] * displayScale;
+          const w = item.width * SCALE * displayScale;
+          const h = item.height * SCALE * displayScale;
+          const lineKey = Math.round(y / 6);
+          if (!lineGroups[lineKey]) lineGroups[lineKey] = [];
+          lineGroups[lineKey].push({ str: item.str, x, y, w, h });
+        }
+
+        let fieldsPlaced = 0;
+        const margin = 30 * displayScale;
+
+        for (const key of Object.keys(lineGroups).sort((a, b) => a - b)) {
+          const lineItems = lineGroups[key].sort((a, b) => a.x - b.x);
+          if (!lineItems.length) continue;
+
+          const lastItem = lineItems[lineItems.length - 1];
+          const lineEndX = lastItem.x + lastItem.w;
+          const lineY = lineItems[0].y;
+          const lineH = Math.max(...lineItems.map((it) => it.h), 14 * displayScale);
+
+          const hasUnderscore = lineItems.some((it) => /_{2,}|—{2,}|-{3,}/.test(it.str));
+          const labelText = lineItems.map((it) => it.str).join("").replace(/[_\-—]+/g, "").trim();
+
+          if (hasUnderscore) {
+            let fieldStartX = lineItems[0].x;
+            for (const it of lineItems) {
+              if (/_{2,}|—{2,}|-{3,}/.test(it.str)) { fieldStartX = it.x; break; }
+            }
+            const fieldW = Math.max(lineEndX - fieldStartX, 60 * displayScale);
+            const placeholder = labelText.replace(/[:\s]+$/, "").split(/\s+/).slice(-3).join(" ");
+            addVisualField(fieldStartX, lineY - lineH + 2, Math.min(fieldW, pageW - fieldStartX - 4), lineH, placeholder);
+            fieldsPlaced++;
+          } else if (lineEndX < pageW - margin * 2 && labelText.length > 0 && labelText.length < 60) {
+            const gapW = pageW - lineEndX - margin;
+            if (gapW > 80 * displayScale) {
+              const placeholder = labelText.replace(/[:\s]+$/, "").split(/\s+/).slice(-3).join(" ");
+              addVisualField(lineEndX + 4, lineY - lineH + 2, gapW, lineH, placeholder);
+              fieldsPlaced++;
+            }
+          }
+        }
+
+        if (fieldsPlaced === 0) {
+          toast("No fields auto-detected \u2014 click on the form to add fields", "info");
+        } else {
+          toast(`Placed ${fieldsPlaced} field${fieldsPlaced > 1 ? "s" : ""} \u2014 click the form to add more`, "success");
+        }
+      } catch (e) {
+        toast("Detection failed \u2014 click on the form to add fields manually", "info");
+      } finally { hideLoading(); }
+    }
+
+    /* --- Fallback: OCR for scanned documents --- */
+    async function detectFieldsOCR() {
+      try {
+        const c = canvas();
+        const worker = await Tesseract.createWorker("eng");
+        const { data } = await worker.recognize(c.toDataURL());
+        await worker.terminate();
+
+        const lines = data.lines || [];
+        const displayScale = c.clientWidth / c.width;
+
+        for (const line of lines) {
+          const text = line.text.trim();
+          const bbox = line.bbox;
+          if (!text || !bbox) continue;
+          if (/_{3,}|—{2,}|-{4,}/.test(text)) {
+            const label = text.replace(/[_\-—]+/g, "").replace(/[:\s]+$/, "").trim();
+            const fieldX = bbox.x0 * displayScale;
+            const fieldY = bbox.y0 * displayScale;
+            const fieldW = (bbox.x1 - bbox.x0) * displayScale;
+            const fieldH = (bbox.y1 - bbox.y0) * displayScale;
+            if (fieldW > 20) {
+              addVisualField(fieldX, fieldY, Math.min(fieldW, c.clientWidth - fieldX - 4), fieldH + 2, label.split(/\s+/).slice(-3).join(" "));
+            }
+          }
+        }
+
+        if (visualFields.length === 0) {
+          toast("No fields auto-detected \u2014 click on the form to add fields", "info");
+        } else {
+          toast(`Placed ${visualFields.length} field${visualFields.length > 1 ? "s" : ""} \u2014 click the form to add more`, "success");
+        }
+      } catch (e) {
+        toast("Click on the form where you want to type", "info");
+      }
+    }
+
+    /* --- Click-to-place on the canvas --- */
+    function onCanvasClick(e) {
+      const c = canvas();
+      if (e.target !== c) return;
+      const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const fontSize = parseInt($("#ffSize", el).value) || 11;
+      const vfs = fontSize * c.clientWidth * SCALE / c.width;
+      const fieldW = Math.min(c.clientWidth * 0.4, c.clientWidth - x - 8);
+      const fieldH = vfs + 8;
+      addVisualField(x, y - fieldH / 2, Math.max(fieldW, 80), fieldH, "");
+    }
+
+    $("#addFieldBtn", el).addEventListener("click", () => {
+      const p = pvw();
+      const c = canvas();
+      const fontSize = parseInt($("#ffSize", el).value) || 11;
+      const vfs = fontSize * c.clientWidth * SCALE / c.width;
+      const w = Math.min(c.clientWidth * 0.5, 250);
+      const h = vfs + 8;
+      const x = (p.clientWidth - w) / 2;
+      const y = 60 + visualFields.length * (h + 8);
+      addVisualField(x, Math.min(y, p.clientHeight - h - 10), w, h, "");
+    });
+
+    function getPtr(e) {
+      if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    let activeDrag = null;
+
+    function addVisualField(x, y, w, h, placeholder) {
+      const id = nextFieldId++;
+      const field = document.createElement("div");
+      field.className = "ff-field";
+      field.innerHTML = `<div class="ff-grip"></div><input type="text" class="ff-input" spellcheck="false"><button class="ff-del"><i data-lucide="x"></i></button>`;
+      Object.assign(field.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+
+      const inp = field.querySelector(".ff-input");
+      if (placeholder) inp.placeholder = placeholder;
+      const fontSize = parseInt($("#ffSize", el).value) || 11;
+      const c = canvas();
+      const vfs = fontSize * c.clientWidth * SCALE / c.width;
+      inp.style.fontSize = vfs + "px";
+
+      pvw().appendChild(field);
+      lucide.createIcons();
+
+      const vf = { id, el: field, inp };
+      visualFields.push(vf);
+      inp.focus();
+
+      field.querySelector(".ff-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        field.remove();
+        const idx = visualFields.indexOf(vf);
+        if (idx >= 0) visualFields.splice(idx, 1);
+      });
+
+      const grip = field.querySelector(".ff-grip");
+      function gripDown(e) {
+        const ptr = getPtr(e);
+        const r = field.getBoundingClientRect();
+        activeDrag = { vf, el: field, ox: ptr.x - r.left, oy: ptr.y - r.top };
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      grip.addEventListener("mousedown", gripDown);
+      grip.addEventListener("touchstart", gripDown, { passive: false });
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchend", onUp);
+
+    function onMove(e) {
+      if (!activeDrag) return;
+      e.preventDefault();
+      const ptr = getPtr(e);
+      const p = pvw();
+      const cr = p.getBoundingClientRect();
+      let nx = ptr.x - cr.left - activeDrag.ox;
+      let ny = ptr.y - cr.top - activeDrag.oy;
+      nx = Math.max(0, Math.min(nx, p.clientWidth - activeDrag.el.offsetWidth));
+      ny = Math.max(0, Math.min(ny, p.clientHeight - activeDrag.el.offsetHeight));
+      activeDrag.el.style.left = nx + "px";
+      activeDrag.el.style.top = ny + "px";
+    }
+
+    function onUp() { activeDrag = null; }
+
+    /* --- Apply visual fields --- */
+    $("#visualGo", el).addEventListener("click", async () => {
+      const filled = visualFields.filter((vf) => vf.inp.value.trim());
+      if (!filled.length) { toast("Fill in at least one field", "error"); return; }
+      showLoading("Applying text\u2026");
+      try {
+        const doc = await PDFDocument.load(pdfBytes);
+        const page = doc.getPage(currentPage);
+        const { width: pgW, height: pgH } = page.getSize();
+        const c = canvas();
+        const sx = pgW / c.clientWidth;
+        const sy = pgH / c.clientHeight;
+        const font = await doc.embedFont(StandardFonts.Helvetica);
+        const pdfFontSize = parseInt($("#ffSize", el).value) || 11;
+        const pvwRect = pvw().getBoundingClientRect();
+
+        for (const vf of filled) {
+          const text = vf.inp.value.trim();
+          const inpRect = vf.inp.getBoundingClientRect();
+          const textX = (inpRect.left - pvwRect.left) * sx;
+          const textY = (inpRect.top - pvwRect.top) * sy;
+          const pdfY = pgH - textY - pdfFontSize * 0.85;
+          page.drawText(sanitizeForPdf(text), { x: textX, y: pdfY, size: pdfFontSize, font, color: rgb(0.05, 0.05, 0.05) });
+        }
+
+        const defName = pdfFile.name.replace(/\.pdf$/i, "_filled.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
   }
 
   /* ================================================

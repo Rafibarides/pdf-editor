@@ -877,6 +877,105 @@ img { display: block; max-width: 100%; }
 .color-swatch-del:hover { color: #EF4444; background: #FEF2F2; }
 .color-swatch-copy svg, .color-swatch-del svg { width: 14px; height: 14px; }
 
+/* ---------- Form Filler: AcroForm Mode ---------- */
+.acro-fields {
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: .25rem;
+}
+.acro-field {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.acro-field label {
+  font-size: .8rem;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.acro-field-check label {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .875rem;
+  cursor: pointer;
+}
+.acro-field-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--blue);
+}
+
+/* ---------- Form Filler: Visual Mode Fields ---------- */
+.ff-field {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  background: rgba(255,255,255,.75);
+  border-bottom: 1.5px solid var(--blue);
+  border-radius: 2px;
+  touch-action: auto;
+}
+.ff-grip {
+  width: 14px;
+  height: 100%;
+  cursor: move;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: .4;
+  transition: opacity .15s;
+}
+.ff-grip::before {
+  content: '\u22EE';
+  font-size: 11px;
+  color: var(--blue);
+  font-weight: 700;
+}
+.ff-field:hover .ff-grip,
+.ff-field:focus-within .ff-grip { opacity: 1; }
+
+.ff-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 1px 3px;
+  font-family: Helvetica, Arial, sans-serif;
+  color: #111;
+}
+.ff-input::placeholder { color: var(--text-3); font-style: italic; }
+
+.ff-del {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color .15s, background .15s;
+  opacity: 0;
+}
+.ff-del svg { width: 12px; height: 12px; }
+.ff-field:hover .ff-del,
+.ff-field:focus-within .ff-del { opacity: 1; }
+.ff-del:hover { color: #EF4444; background: #FEF2F2; }
+
+@media (pointer: coarse) {
+  .ff-grip { width: 24px; opacity: 1; }
+  .ff-del { opacity: 1; width: 24px; height: 24px; }
+  .ff-field { min-height: 28px; }
+}
+
 /* ---------- Animations ---------- */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
