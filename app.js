@@ -26,18 +26,18 @@
   ================================================ */
   const TOOLS = [
     { id: "merge", icon: "layers", name: "Merge PDFs", desc: "Combine multiple PDFs into one document", accent: "blue" },
-    { id: "split", icon: "scissors", name: "Split PDF", desc: "Divide a PDF into smaller parts", accent: "pink" },
-    { id: "convert", icon: "file-up", name: "Convert to PDF", desc: "Turn images and documents into PDF", accent: "blue" },
-    { id: "sign", icon: "pen-tool", name: "Sign PDF", desc: "Add your signature to a document", accent: "pink" },
-    { id: "rotate", icon: "rotate-cw", name: "Rotate Pages", desc: "Change page orientation", accent: "blue" },
-    { id: "extract", icon: "file-output", name: "Extract Pages", desc: "Pull specific pages from a PDF", accent: "pink" },
-    { id: "watermark", icon: "droplets", name: "Add Watermark", desc: "Overlay text across every page", accent: "blue" },
-    { id: "pagenums", icon: "hash", name: "Page Numbers", desc: "Add numbering to your pages", accent: "pink" },
-    { id: "textbox", icon: "type", name: "Add Textbox", desc: "Place custom text anywhere on a page", accent: "blue" },
-    { id: "imgconvert", icon: "repeat", name: "Image Converter", desc: "Convert images between JPG, PNG, and WEBP", accent: "pink" },
-    { id: "imgresize", icon: "scaling", name: "Image Resize", desc: "Resize by width or set a file size limit", accent: "blue" },
-    { id: "colorpicker", icon: "pipette", name: "Color Picker", desc: "Pick colors from any image and build a palette", accent: "pink" },
-    { id: "compress", icon: "minimize-2", name: "Compress PDF", desc: "Reduce file size for easy sharing", accent: "blue" },
+    { id: "compress", icon: "minimize-2", name: "Compress PDF", desc: "Reduce file size for easy sharing", accent: "pink" },
+    { id: "split", icon: "scissors", name: "Split PDF", desc: "Divide a PDF into smaller parts", accent: "blue" },
+    { id: "convert", icon: "file-up", name: "Convert to PDF", desc: "Turn images and documents into PDF", accent: "pink" },
+    { id: "sign", icon: "pen-tool", name: "Sign PDF", desc: "Add your signature to a document", accent: "blue" },
+    { id: "rotate", icon: "rotate-cw", name: "Rotate Pages", desc: "Change page orientation", accent: "pink" },
+    { id: "extract", icon: "file-output", name: "Extract Pages", desc: "Pull specific pages from a PDF", accent: "blue" },
+    { id: "watermark", icon: "droplets", name: "Add Watermark", desc: "Overlay text across every page", accent: "pink" },
+    { id: "pagenums", icon: "hash", name: "Page Numbers", desc: "Add numbering to your pages", accent: "blue" },
+    { id: "textbox", icon: "type", name: "Add Textbox", desc: "Place custom text anywhere on a page", accent: "pink" },
+    { id: "imgconvert", icon: "repeat", name: "Image Converter", desc: "Convert images between JPG, PNG, and WEBP", accent: "blue" },
+    { id: "imgresize", icon: "scaling", name: "Image Resize", desc: "Resize by width or set a file size limit", accent: "pink" },
+    { id: "colorpicker", icon: "pipette", name: "Color Picker", desc: "Pick colors from any image and build a palette", accent: "blue" },
   ];
 
   const RENDERERS = {
