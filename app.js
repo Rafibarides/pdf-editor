@@ -32,6 +32,7 @@
     { id: "sign", icon: "pen-tool", name: "Sign PDF", desc: "Add your signature to a document", accent: "blue" },
     { id: "rotate", icon: "rotate-cw", name: "Rotate Pages", desc: "Change page orientation", accent: "pink" },
     { id: "extract", icon: "file-output", name: "Extract Pages", desc: "Pull specific pages from a PDF", accent: "blue" },
+    { id: "reorder", icon: "arrow-down-up", name: "Reorder Pages", desc: "Drag and drop pages into a new order", accent: "pink" },
     { id: "watermark", icon: "droplets", name: "Add Watermark", desc: "Overlay text across every page", accent: "pink" },
     { id: "pagenums", icon: "hash", name: "Page Numbers", desc: "Add numbering to your pages", accent: "blue" },
     { id: "textbox", icon: "type", name: "Add Textbox", desc: "Place custom text anywhere on a page", accent: "pink" },
@@ -47,6 +48,7 @@
     sign: renderSign,
     rotate: renderRotate,
     extract: renderExtract,
+    reorder: renderReorder,
     watermark: renderWatermark,
     pagenums: renderPageNums,
     textbox: renderTextbox,
@@ -307,6 +309,19 @@
       <div class="tool-head"><h2>Merge PDFs</h2><p>Combine multiple PDF files into one. Drag items to reorder.</p></div>
       <div id="dz"></div>
       <div id="flist" class="file-list"></div>
+      <div class="form-group mt-1">
+        <label for="psize">Page size</label>
+        <div class="select-wrap"><select id="psize" class="input">
+          <option value="original">Keep each page's original size (mixed dimensions)</option>
+          <option value="first">Match first PDF's first page</option>
+          <option value="largest">Match the largest page across all PDFs</option>
+          <option value="a4p">A4 Portrait (210 \u00d7 297 mm)</option>
+          <option value="a4l">A4 Landscape (297 \u00d7 210 mm)</option>
+          <option value="letterp">US Letter Portrait (8.5 \u00d7 11 in)</option>
+          <option value="letterl">US Letter Landscape (11 \u00d7 8.5 in)</option>
+        </select></div>
+        <p class="info-hint">Choose a uniform size to fix funky viewing from mixed orientations and resolutions. Pages are scaled to fit and centered.</p>
+      </div>
       <div id="oname-wrap" class="mt-1"></div>
       <div class="tool-actions"><div id="out"></div><button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="layers"></i>Merge</button></div>`;
     $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", multiple: true, label: "Drop PDFs here or click to browse", hint: ".pdf files", onFiles: (f) => { files = files.concat(f.filter((x) => x.name.endsWith(".pdf"))); renderList(); } }));
@@ -418,16 +433,106 @@
 
     $("#go", el).addEventListener("click", async () => {
       if (files.length < 2) return;
+      const sizeMode = $("#psize", el).value;
       showLoading("Merging PDFs\u2026");
       try {
         const merged = await PDFDocument.create();
-        for (const f of files) {
-          const src = await PDFDocument.load(await readFile(f));
-          (await merged.copyPages(src, src.getPageIndices())).forEach((p) => merged.addPage(p));
+
+        if (sizeMode === "original") {
+          for (const f of files) {
+            const src = await PDFDocument.load(await readFile(f));
+            (await merged.copyPages(src, src.getPageIndices())).forEach((p) => merged.addPage(p));
+          }
+        } else {
+          /* Load all source docs first so we can compute target dimensions */
+          const srcs = [];
+          for (const f of files) {
+            srcs.push(await PDFDocument.load(await readFile(f)));
+          }
+
+          const [targetW, targetH] = resolveTargetPageSize(sizeMode, srcs);
+
+          let pageCounter = 0;
+          let totalPages = 0;
+          srcs.forEach((s) => { totalPages += s.getPageCount(); });
+
+          for (const src of srcs) {
+            for (const srcPage of src.getPages()) {
+              pageCounter++;
+              $("#loading-text").textContent = `Merging page ${pageCounter} / ${totalPages}\u2026`;
+              const ep = await merged.embedPage(srcPage);
+              const newPage = merged.addPage([targetW, targetH]);
+              drawEmbeddedPageFit(newPage, ep, srcPage.getRotation().angle, targetW, targetH);
+            }
+          }
         }
+
         const outName = getOutputName(el, "merged.pdf");
         await savePdf(await merged.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    });
+  }
+
+  /* ================================================
+     Helpers for uniform-size merge
+  ================================================ */
+  function resolveTargetPageSize(mode, srcs) {
+    const PRESETS = {
+      a4p:     [595.28, 841.89],
+      a4l:     [841.89, 595.28],
+      letterp: [612,    792],
+      letterl: [792,    612],
+    };
+    if (PRESETS[mode]) return PRESETS[mode];
+
+    if (mode === "first") {
+      const p = srcs[0].getPage(0);
+      const angle = ((p.getRotation().angle % 360) + 360) % 360;
+      const { width, height } = p.getSize();
+      return angle === 90 || angle === 270 ? [height, width] : [width, height];
+    }
+
+    /* largest by visible area */
+    let bestW = 0, bestH = 0, bestArea = 0;
+    for (const src of srcs) {
+      for (const p of src.getPages()) {
+        const angle = ((p.getRotation().angle % 360) + 360) % 360;
+        const { width, height } = p.getSize();
+        const w = angle === 90 || angle === 270 ? height : width;
+        const h = angle === 90 || angle === 270 ? width  : height;
+        const area = w * h;
+        if (area > bestArea) { bestArea = area; bestW = w; bestH = h; }
+      }
+    }
+    return [bestW || 595.28, bestH || 841.89];
+  }
+
+  /* Draws an embedded page scaled to fit, centered, with rotation preserved */
+  function drawEmbeddedPageFit(page, ep, srcRotation, boxW, boxH) {
+    const angle = ((srcRotation % 360) + 360) % 360;
+    const rotated = angle === 90 || angle === 270;
+    const natW = ep.width;
+    const natH = ep.height;
+    const visW = rotated ? natH : natW;
+    const visH = rotated ? natW : natH;
+    const scale = Math.min(boxW / visW, boxH / visH);
+    const drawVisW = visW * scale;
+    const drawVisH = visH * scale;
+    const offX = (boxW - drawVisW) / 2;
+    const offY = (boxH - drawVisH) / 2;
+    const sw = natW * scale;
+    const sh = natH * scale;
+
+    let x = offX, y = offY;
+    if (angle === 90)       { x = offX + drawVisW; y = offY; }
+    else if (angle === 180) { x = offX + drawVisW; y = offY + drawVisH; }
+    else if (angle === 270) { x = offX;            y = offY + drawVisH; }
+
+    page.drawPage(ep, {
+      x, y,
+      width: sw,
+      height: sh,
+      rotate: degrees(angle),
     });
   }
 
@@ -1174,6 +1279,226 @@
         await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
+  }
+
+  /* ================================================
+     Tool: Reorder Pages
+  ================================================ */
+  function renderReorder(el) {
+    let file = null;
+    let pdfJsDoc = null;
+    let originalOrder = [];
+    let pages = [];
+    let nextId = 1;
+
+    el.innerHTML = `
+      <div class="tool-head">
+        <h2>Reorder Pages</h2>
+        <p>Upload a PDF, drag pages into a new order, delete any you don't want, then download the result.</p>
+      </div>
+      <div id="dz"></div>
+      <div id="ws" class="hidden">
+        <div class="reorder-toolbar">
+          <span id="pgInfo" class="reorder-stats"></span>
+          <div class="reorder-actions">
+            <button class="btn btn-outline btn-sm" id="resetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>
+            <button class="btn btn-ghost btn-sm" id="clearBtn"><i data-lucide="upload"></i>Change PDF</button>
+          </div>
+        </div>
+        <p class="reorder-hint"><i data-lucide="info"></i>Drag tiles to reorder. Hover and click the <i data-lucide="x"></i> to remove a page.</p>
+        <div id="pgrid" class="page-grid"></div>
+        <div id="oname-wrap" class="mt-1"></div>
+        <div class="tool-actions">
+          <div id="out"></div>
+          <button class="btn btn-primary btn-lg" id="go" disabled><i data-lucide="download"></i>Save Reordered PDF</button>
+        </div>
+      </div>`;
+
+    $("#dz", el).appendChild(makeDropZone({ accept: ".pdf", label: "Drop a PDF here", hint: ".pdf", onFiles: onFile }));
+    $("#out", el).appendChild(makeOutputSel());
+    lucide.createIcons();
+
+    $("#resetBtn", el).addEventListener("click", () => {
+      pages = originalOrder.map((p) => ({ ...p }));
+      renderGrid();
+    });
+
+    $("#clearBtn", el).addEventListener("click", () => {
+      file = null;
+      pdfJsDoc = null;
+      originalOrder = [];
+      pages = [];
+      $("#ws", el).classList.add("hidden");
+      $("#dz", el).classList.remove("hidden");
+      $("#go", el).disabled = true;
+    });
+
+    $("#go", el).addEventListener("click", saveReordered);
+
+    async function onFile(files) {
+      file = files[0];
+      showLoading("Loading PDF\u2026");
+      try {
+        const bytes = await readFile(file);
+        pdfJsDoc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+        const total = pdfJsDoc.numPages;
+        originalOrder = [];
+        pages = [];
+        for (let i = 0; i < total; i++) {
+          $("#loading-text").textContent = `Rendering page ${i + 1} / ${total}\u2026`;
+          const pg = await pdfJsDoc.getPage(i + 1);
+          const vp = pg.getViewport({ scale: 0.35 });
+          const c = document.createElement("canvas");
+          c.width = vp.width;
+          c.height = vp.height;
+          await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+          const dataUrl = c.toDataURL("image/jpeg", 0.75);
+          const entry = { origIndex: i, id: nextId++, thumb: dataUrl };
+          originalOrder.push({ ...entry });
+          pages.push(entry);
+        }
+        $("#dz", el).classList.add("hidden");
+        $("#ws", el).classList.remove("hidden");
+        const wrap = $("#oname-wrap", el);
+        wrap.innerHTML = "";
+        wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_reordered.pdf")));
+        $("#go", el).disabled = pages.length === 0;
+        lucide.createIcons();
+        renderGrid();
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    }
+
+    function renderGrid() {
+      const grid = $("#pgrid", el);
+      const total = originalOrder.length;
+      const kept = pages.length;
+      const removed = total - kept;
+      $("#pgInfo", el).textContent = removed > 0
+        ? `${kept} of ${total} pages \u2014 ${removed} removed`
+        : `${kept} page${kept === 1 ? "" : "s"}`;
+      $("#go", el).disabled = pages.length === 0;
+
+      grid.innerHTML = pages.map((p, i) => `
+        <div class="page-tile" draggable="true" data-i="${i}" data-id="${p.id}">
+          <div class="page-tile-grip" aria-label="Drag"><i data-lucide="grip-horizontal"></i></div>
+          <button class="page-tile-del" data-i="${i}" aria-label="Remove page"><i data-lucide="x"></i></button>
+          <div class="page-tile-img"><img src="${p.thumb}" alt="Page ${p.origIndex + 1}" draggable="false"></div>
+          <div class="page-tile-foot">
+            <span class="page-tile-num">${i + 1}</span>
+            <span class="page-tile-orig">was p. ${p.origIndex + 1}</span>
+          </div>
+        </div>`).join("");
+
+      grid.querySelectorAll(".page-tile-del").forEach((b) => {
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          pages.splice(+b.dataset.i, 1);
+          renderGrid();
+        });
+        b.addEventListener("dragstart", (e) => e.preventDefault());
+      });
+
+      let dragI = null;
+      grid.querySelectorAll(".page-tile").forEach((tile) => {
+        tile.addEventListener("dragstart", (e) => {
+          dragI = +tile.dataset.i;
+          tile.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setData("text/plain", String(dragI)); } catch (_) {}
+        });
+        tile.addEventListener("dragend", () => tile.classList.remove("dragging"));
+        tile.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          if (dragI === null || dragI === +tile.dataset.i) return;
+          tile.classList.add("drag-target");
+        });
+        tile.addEventListener("dragleave", () => tile.classList.remove("drag-target"));
+        tile.addEventListener("drop", (e) => {
+          e.preventDefault();
+          tile.classList.remove("drag-target");
+          const j = +tile.dataset.i;
+          if (dragI !== null && dragI !== j) {
+            const [m] = pages.splice(dragI, 1);
+            pages.splice(j, 0, m);
+            renderGrid();
+          }
+          dragI = null;
+        });
+      });
+
+      /* Touch-based reordering via grip handle */
+      let touchDragI = null, touchClone = null, touchTargetI = null;
+      grid.querySelectorAll(".page-tile-grip").forEach((grip) => {
+        grip.addEventListener("touchstart", (e) => {
+          e.preventDefault();
+          const tile = grip.closest(".page-tile");
+          touchDragI = +tile.dataset.i;
+          touchTargetI = null;
+          tile.classList.add("dragging");
+          touchClone = tile.cloneNode(true);
+          touchClone.classList.add("page-tile-ghost");
+          const rect = tile.getBoundingClientRect();
+          touchClone.style.width = rect.width + "px";
+          touchClone.style.left = rect.left + "px";
+          touchClone.style.top = rect.top + "px";
+          document.body.appendChild(touchClone);
+        }, { passive: false });
+      });
+
+      grid.addEventListener("touchmove", (e) => {
+        if (touchDragI === null) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        if (touchClone) {
+          touchClone.style.left = (touch.clientX - touchClone.offsetWidth / 2) + "px";
+          touchClone.style.top  = (touch.clientY - 30) + "px";
+        }
+        grid.querySelectorAll(".page-tile").forEach((t) => t.classList.remove("drag-target"));
+        touchTargetI = null;
+        if (touchClone) touchClone.style.pointerEvents = "none";
+        const hit = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (touchClone) touchClone.style.pointerEvents = "";
+        if (hit) {
+          const ti = hit.closest(".page-tile");
+          if (ti && +ti.dataset.i !== touchDragI) {
+            ti.classList.add("drag-target");
+            touchTargetI = +ti.dataset.i;
+          }
+        }
+      }, { passive: false });
+
+      const touchEnd = () => {
+        if (touchDragI === null) return;
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        grid.querySelectorAll(".page-tile").forEach((t) => t.classList.remove("dragging", "drag-target"));
+        if (touchTargetI !== null && touchTargetI !== touchDragI) {
+          const [m] = pages.splice(touchDragI, 1);
+          pages.splice(touchTargetI, 0, m);
+        }
+        touchDragI = null;
+        touchTargetI = null;
+        renderGrid();
+      };
+      grid.addEventListener("touchend", touchEnd, { passive: false });
+      grid.addEventListener("touchcancel", touchEnd, { passive: false });
+
+      lucide.createIcons();
+    }
+
+    async function saveReordered() {
+      if (!pages.length) { toast("No pages to save", "error"); return; }
+      showLoading("Saving reordered PDF\u2026");
+      try {
+        const src = await PDFDocument.load(await readFile(file));
+        const doc = await PDFDocument.create();
+        const indices = pages.map((p) => p.origIndex);
+        const copied = await doc.copyPages(src, indices);
+        copied.forEach((p) => doc.addPage(p));
+        const defName = file.name.replace(/\.pdf$/i, "_reordered.pdf");
+        const outName = getOutputName(el, defName);
+        await savePdf(await doc.save(), outName.endsWith(".pdf") ? outName : outName + ".pdf");
+      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+    }
   }
 
   /* ================================================
