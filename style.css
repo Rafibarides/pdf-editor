@@ -135,7 +135,7 @@ img { display: block; max-width: 100%; }
   color: var(--text);
 }
 .drop-zone-hero {
-  padding: 2.75rem 1.5rem;
+  padding: 1.25rem 1.5rem;
   border-width: 2px;
   background: linear-gradient(180deg, var(--surface) 0%, var(--blue-light) 100%);
 }
@@ -143,6 +143,9 @@ img { display: block; max-width: 100%; }
 .drop-zone-hero.drag-over {
   background: var(--blue-light);
 }
+.drop-zone-hero .drop-zone-icon { margin-bottom: .25rem; }
+.drop-zone-hero .drop-zone-icon svg { width: 26px; height: 26px; }
+.drop-zone-hero .drop-zone-label { font-size: .95rem; }
 .home-or {
   text-align: center;
   font-size: .875rem;
