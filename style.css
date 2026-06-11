@@ -271,13 +271,17 @@ img { display: block; max-width: 100%; }
   padding: .75rem 1rem;
   border-top: 1px solid var(--border);
 }
-.wb-panel {
-  margin-top: 1.25rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+.wb-modal {
   background: var(--surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  width: 95%;
+  max-width: 760px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  box-shadow: var(--shadow-md);
+  animation: scaleIn .22s var(--ease);
 }
 .wb-panel-head {
   display: flex;
@@ -287,9 +291,17 @@ img { display: block; max-width: 100%; }
   padding: .75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--border-light);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
-.wb-panel-head span { font-weight: 600; font-size: .9rem; }
-.wb-panel-body { padding: 1rem; }
+.wb-panel-head span { font-weight: 600; font-size: .95rem; }
+.wb-panel-body {
+  padding: 1rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+body.wb-modal-open { overflow: hidden; }
 .wb-panel-tools {
   display: flex;
   flex-wrap: wrap;

@@ -2891,15 +2891,17 @@
           </div>
           <p class="wb-hint" id="wbHint"></p>
           <div id="wbGrid" class="page-grid"></div>
-          <div id="wbPanel" class="wb-panel hidden">
+          <div id="wbOnameWrap" class="wb-oname-wrap"></div>
+          <input type="file" id="wbAppendIn" accept=".pdf" multiple class="hidden">
+        </div>
+        <div id="wbPanelOv" class="overlay hidden">
+          <div id="wbPanel" class="wb-modal">
             <div class="wb-panel-head">
               <span id="wbPanelTitle"></span>
-              <button class="btn btn-ghost btn-sm" id="wbPanelBack"><i data-lucide="arrow-left"></i>Back to pages</button>
+              <button class="btn-icon" id="wbPanelBack" aria-label="Close"><i data-lucide="x"></i></button>
             </div>
             <div class="wb-panel-body" id="wbPanelBody"></div>
           </div>
-          <div id="wbOnameWrap" class="wb-oname-wrap"></div>
-          <input type="file" id="wbAppendIn" accept=".pdf" multiple class="hidden">
         </div>
       </div>
       <div id="wbPreviewOv" class="overlay hidden">
@@ -2923,9 +2925,12 @@
     const wbLoaded = $("#wbLoaded", el);
     const wbGrid = $("#wbGrid", el);
     const wbHint = $("#wbHint", el);
+    const wbPanelOv = $("#wbPanelOv", el);
     const wbPanel = $("#wbPanel", el);
     const wbPanelBody = $("#wbPanelBody", el);
     const wbAppendIn = $("#wbAppendIn", el);
+
+    wbPanelOv.addEventListener("click", (e) => { if (e.target === wbPanelOv) closePanel(); });
 
     $("#wbDz", el).appendChild(makeDropZone({
       accept: ".pdf",
@@ -3041,7 +3046,8 @@
     function closePanel() {
       panelPageId = null;
       panelPdfJs = null;
-      wbPanel.classList.add("hidden");
+      wbPanelOv.classList.add("hidden");
+      document.body.classList.remove("wb-modal-open");
       wbPanelBody.innerHTML = "";
     }
 
@@ -3194,8 +3200,10 @@
       panelPageId = pageEntry.id;
       panelPageIdx = pageEntry.pageIdx;
       $("#wbPanelTitle", el).textContent = pageLabel(pageEntry) + (panelMode === "sign" ? " \u2014 Sign" : " \u2014 Add text");
-      wbPanel.classList.remove("hidden");
       wbPanelBody.innerHTML = `<div class="spinner" style="margin:2rem auto"></div>`;
+      wbPanelOv.classList.remove("hidden");
+      document.body.classList.add("wb-modal-open");
+      wbPanelBody.scrollTop = 0;
       showLoading("Loading page\u2026");
       try {
         const docBytes = docs[pageEntry.docIdx].bytes;
