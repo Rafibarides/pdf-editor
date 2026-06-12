@@ -2322,6 +2322,7 @@
   ================================================ */
   function renderCompress(el) {
     let file = null;
+    let fileBytes = null;
     el.innerHTML = `
       <div class="tool-head"><h2>Compress PDF</h2><p>Reduce PDF file size by re-rendering pages as compressed images. Optionally set a target size.</p></div>
       <div id="dz"></div>
@@ -2354,14 +2355,19 @@
     lucide.createIcons();
 
     async function onFile(files) {
-      file = files[0];
+      const picked = files[0];
+      if (!picked) return;
       showLoading("Reading PDF\u2026");
       try {
-        const bytes = await readFile(file);
-        const pdfJsDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+        fileBytes = await readFile(picked);
+        const loadingTask = pdfjsLib.getDocument({ data: fileBytes.slice() });
+        const pdfJsDoc = await loadingTask.promise;
+        const numPages = pdfJsDoc.numPages;
+        await loadingTask.destroy();
+        file = picked;
         $("#fn", el).textContent = file.name;
         $("#origSz", el).textContent = formatBytes(file.size);
-        $("#pgCnt", el).textContent = pdfJsDoc.numPages;
+        $("#pgCnt", el).textContent = numPages;
         $("#opts", el).classList.remove("hidden");
         $("#result", el).classList.add("hidden");
         $("#go", el).disabled = false;
@@ -2369,14 +2375,17 @@
         wrap.innerHTML = "";
         wrap.appendChild(makeOutputName(file.name.replace(/\.pdf$/i, "_compressed.pdf")));
         lucide.createIcons();
-      } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
+      } catch (e) {
+        fileBytes = null;
+        toast("Could not read that PDF: " + e.message, "error");
+      } finally { hideLoading(); }
     }
 
     $("#go", el).addEventListener("click", async () => {
       if (!file) return;
       showLoading("Compressing PDF\u2026");
       try {
-        const bytes = await readFile(file);
+        const bytes = fileBytes ? fileBytes.slice() : await readFile(file);
         const pdfJsDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
         const numPages = pdfJsDoc.numPages;
         const qualSel = $("#cQual", el).value;
@@ -2428,7 +2437,7 @@
 
         const defName = file.name.replace(/\.pdf$/i, "_compressed.pdf");
         const outName = getOutputName(el, defName);
-        await saveBlobAs(blob, outName.endsWith(".pdf") ? outName : outName + ".pdf");
+        await saveBlobAs(resultBlob, outName.endsWith(".pdf") ? outName : outName + ".pdf");
       } catch (e) { toast("Error: " + e.message, "error"); } finally { hideLoading(); }
     });
     bootToolFiles(onFile);
