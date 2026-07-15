@@ -521,14 +521,14 @@
 
         if (sizeMode === "original") {
           for (const f of files) {
-            const src = await PDFDocument.load(await readFile(f));
+            const src = await PDFDocument.load(await readFile(f), { ignoreEncryption: true });
             (await merged.copyPages(src, src.getPageIndices())).forEach((p) => merged.addPage(p));
           }
         } else {
           /* Load all source docs first so we can compute target dimensions */
           const srcs = [];
           for (const f of files) {
-            srcs.push(await PDFDocument.load(await readFile(f)));
+            srcs.push(await PDFDocument.load(await readFile(f), { ignoreEncryption: true }));
           }
 
           const [targetW, targetH] = resolveTargetPageSize(sizeMode, srcs);
